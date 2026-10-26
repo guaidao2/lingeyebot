@@ -1,0 +1,40 @@
+# Build output
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Local runtime data
+/config.json
+/data/
+/workspace/
+/skills/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Node
+node_modules/
+web/dist/
+
+# Environment
+.env
+.env.local
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Local-only development docs and reference checkouts
+/docs/
+/references/
+
+# Go build scratch inside the workspace
+/.gotmp/
+/scratch/
+
+# Embedded UI build output (kept out of git; scripts/build.sh fills it)
+/internal/server/dist/*
+!/internal/server/dist/.gitkeep
