@@ -57,6 +57,7 @@ export default function App() {
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
   const [streamingText, setStreamingText] = useState("");
+  const [taskStreams, setTaskStreams] = useState<Record<string, string>>({});
   const [mcpStatus, setMcpStatus] = useState<MCPStatus[]>([]);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [roles, setRoles] = useState<RoleMeta[]>([]);
@@ -237,33 +238,55 @@ export default function App() {
   }, [activeId, view]);
 
   useEffect(() => {
+    setTaskStreams({});
+  }, [activeId]);
+
+  useEffect(() => {
     if (view === "conversation" && inspector && inspectorSqueezes) {
       setSidebar(false);
     }
   }, [view, inspector, narrow, inspectorSqueezes]);
 
   useEffect(() => {
-    if (!activeId || view !== "conversation") return;
+    if (!activeId) return;
     const source = new EventSource(`/api/runs/${activeId}/events/stream`);
     source.onmessage = (event) => {
       try {
         const frame = JSON.parse(event.data) as any;
         if (frame.type === "event" && frame.event) {
           const ev = frame.event;
+          const taskId = typeof ev.taskId === "string" ? ev.taskId : "";
           if (ev.kind === "assistant_delta") {
-            setStreamingText((prev) => prev + (ev.detail ?? ""));
-          } else if (ev.kind === "assistant" || ev.kind === "tool_call" || ev.kind === "error" || ev.kind === "notice") {
+            if (taskId) {
+              setTaskStreams((prev) => ({ ...prev, [taskId]: (prev[taskId] ?? "") + (ev.detail ?? "") }));
+            } else {
+              setStreamingText((prev) => prev + (ev.detail ?? ""));
+            }
+          } else if (ev.kind === "assistant") {
+            if (taskId) {
+              setTaskStreams((prev) => ({ ...prev, [taskId]: ev.detail ?? prev[taskId] ?? "" }));
+            } else {
+              setStreamingText("");
+            }
+          } else if (!taskId && (ev.kind === "tool_call" || ev.kind === "error" || ev.kind === "notice")) {
             setStreamingText("");
           }
           if (ev.kind !== "assistant_delta") {
             setEvents((prev) => [
               ...prev.slice(-399),
               {
-                id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, runId: activeId, taskId: "",
+                id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, runId: activeId, taskId,
                 kind: ev.kind ?? "", tool: ev.tool ?? "", summary: ev.summary ?? "",
                 detail: ev.detail ?? "", createdAt: new Date().toISOString(),
               },
             ]);
+            if (taskId && ev.kind === "subagent" && String(ev.summary ?? "").startsWith("子代理结束")) {
+              setTaskStreams((prev) => {
+                const next = { ...prev };
+                delete next[taskId];
+                return next;
+              });
+            }
           }
         }
         if (frame.type === "approval" && frame.approval) {
@@ -621,7 +644,7 @@ export default function App() {
               mode={modes.find((m) => m.id === detail.run.mode)}
               messages={messages}
               approvals={approvals}
-              events={events}
+              events={events.filter((event) => !event.taskId)}
               streaming={streamingText}
               busy={busy}
               modelConfigured={Boolean(runProvider?.baseUrl && runProvider?.model)}
@@ -677,7 +700,7 @@ export default function App() {
               <FindingsPage findings={allFindings} onOpenConversation={openConversation} onStatus={setFindingStatus} />
             ) : null}
             {view === "tasks" ? (
-              <TasksPage tasks={allTasks} runs={runs} projects={projects} roles={roles} mainPrompts={mainPrompts} onOpenConversation={openConversation} onCancel={cancelSubagent} />
+              <TasksPage tasks={allTasks} runs={runs} projects={projects} roles={roles} mainPrompts={mainPrompts} taskStreams={taskStreams} onOpenConversation={openConversation} onCancel={cancelSubagent} />
             ) : null}
             {view === "approvals" ? (
               <ApprovalsPage approvals={allApprovals} runs={runs} projects={projects} onDecide={decide} onOpenConversation={openConversation} />
@@ -706,6 +729,7 @@ export default function App() {
           onClose={() => setInspector(false)}
           onOpenConversation={openConversation}
           onTaskCancel={cancelSubagent}
+          taskStreams={taskStreams}
         />
       ) : null}
 

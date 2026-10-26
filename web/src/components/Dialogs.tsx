@@ -542,7 +542,7 @@ export function SettingsDialog({
             </select>
           </label>
           <label className="field">
-            <span>单轮工具迭代上限</span>
+            <span>单轮工具迭代上限（0 = 不限制）</span>
             <input
               type="number"
               value={draft.runtime.maxIterations}
@@ -550,7 +550,7 @@ export function SettingsDialog({
             />
           </label>
           <label className="field">
-            <span>自动继续上限（轮）</span>
+            <span>自动继续上限（轮，0 = 不限制）</span>
             <input
               type="number"
               value={draft.runtime.maxAutoTurns}

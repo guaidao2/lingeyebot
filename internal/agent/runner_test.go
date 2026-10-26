@@ -246,3 +246,12 @@ func TestMessagesFromStoreRepairsOrphans(t *testing.T) {
 		}
 	}
 }
+
+func TestRunnerEventCarriesTaskID(t *testing.T) {
+	var got Event
+	r := &Runner{TaskID: "task-1", Sink: SinkFunc(func(_ string, ev Event) { got = ev })}
+	r.emit(Event{Kind: "assistant_delta", Detail: "chunk"})
+	if got.TaskID != "task-1" || got.Kind != "assistant_delta" || got.Detail != "chunk" {
+		t.Fatalf("event = %+v", got)
+	}
+}

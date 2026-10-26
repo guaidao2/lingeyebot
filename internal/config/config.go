@@ -14,7 +14,7 @@ import (
 )
 
 // SchemaVersion is bumped when legacy config defaults need a one-time upgrade.
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 // Provider describes one LLM endpoint. Both OpenAI-compatible and Anthropic
 // protocols are supported; the user supplies base URL, key and model.
@@ -111,9 +111,9 @@ func Default() Config {
 		Approval:  ApprovalConfig{Mode: "auto"},
 		Auth:      AuthConfig{Username: "bot", SessionDays: 7},
 		Runtime: RuntimeConfig{
-			MaxIterations:    60,
+			MaxIterations:    0,
 			MaxOutputTokens:  32768,
-			MaxAutoTurns:     40,
+			MaxAutoTurns:     0,
 			ContextMessages:  80,
 			ContextWindow:    1000000,
 			ToolResultChars:  24000,
@@ -231,13 +231,20 @@ func Load() (Config, error) {
 }
 
 // upgradeLegacyDefaults lifts only the historical default values to the new
-// 32768-output / 1M-context baseline.
+// baseline. The old 60-iteration / 40-auto-turn caps were defaults, not user
+// choices; 0 now means unlimited and is the new default.
 func upgradeLegacyDefaults(cfg *Config) {
 	if cfg.Runtime.MaxOutputTokens == 8192 {
 		cfg.Runtime.MaxOutputTokens = 32768
 	}
 	if cfg.Runtime.ContextWindow == 128000 {
 		cfg.Runtime.ContextWindow = 1000000
+	}
+	if cfg.Runtime.MaxIterations == 60 {
+		cfg.Runtime.MaxIterations = 0
+	}
+	if cfg.Runtime.MaxAutoTurns == 40 {
+		cfg.Runtime.MaxAutoTurns = 0
 	}
 	for i := range cfg.Providers {
 		if cfg.Providers[i].MaxTokens == 4096 {
@@ -390,11 +397,11 @@ func normalize(cfg *Config) {
 	default:
 		cfg.Approval.Mode = "auto"
 	}
-	if cfg.Runtime.MaxIterations <= 0 {
-		cfg.Runtime.MaxIterations = 60
+	if cfg.Runtime.MaxIterations < 0 {
+		cfg.Runtime.MaxIterations = 0
 	}
-	if cfg.Runtime.MaxAutoTurns <= 0 {
-		cfg.Runtime.MaxAutoTurns = 40
+	if cfg.Runtime.MaxAutoTurns < 0 {
+		cfg.Runtime.MaxAutoTurns = 0
 	}
 	if cfg.Runtime.MaxOutputTokens <= 0 {
 		cfg.Runtime.MaxOutputTokens = 32768

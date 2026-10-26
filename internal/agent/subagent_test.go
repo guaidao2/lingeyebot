@@ -40,14 +40,17 @@ func TestSubagentRunsAndAnnounces(t *testing.T) {
 	}
 	sess, _ := st.EnsureSession(run.ID)
 	msgs, _ := st.ListMessages(sess.ID, 0)
-	found := false
-	for _, msg := range msgs {
-		if strings.Contains(msg.Content, "[子代理") && strings.Contains(msg.Content, "3 个子域") {
-			found = true
+	var found *store.Message
+	for i := range msgs {
+		if strings.Contains(msgs[i].Content, "[子代理") && strings.Contains(msgs[i].Content, "3 个子域") {
+			found = &msgs[i]
 		}
 	}
-	if !found {
+	if found == nil {
 		t.Fatalf("parent session missing announcement: %+v", msgs)
+	}
+	if found.Visible {
+		t.Fatal("subagent announcement must be hidden from the user-facing conversation")
 	}
 }
 

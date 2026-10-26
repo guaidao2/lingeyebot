@@ -2409,6 +2409,10 @@ html[data-theme="light"] .provider-card .radio {
   overflow-wrap: anywhere;
 }
 
+.task-output.task-live {
+  border-left: 3px solid var(--accent);
+}
+
 .inbox-row {
   display: grid;
   grid-template-columns: 145px minmax(0, 1fr);

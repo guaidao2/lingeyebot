@@ -28,7 +28,9 @@ web/dist/
 .vscode/
 
 # Local-only development docs and reference checkouts
-/docs/
+/docs/*
+!/docs/USAGE.md
+!/docs/DESIGN.md
 /references/
 
 # Go build scratch inside the workspace

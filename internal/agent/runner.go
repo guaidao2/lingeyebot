@@ -17,6 +17,7 @@ type Event struct {
 	Tool    string `json:"tool,omitempty"`
 	Summary string `json:"summary,omitempty"`
 	Detail  string `json:"detail,omitempty"`
+	TaskID  string `json:"taskId,omitempty"`
 }
 
 // Sink receives runner events tagged with their run.
@@ -94,8 +95,8 @@ func (r *Runner) Run(ctx context.Context, req TurnRequest) (TurnResult, error) {
 		return TurnResult{}, fmt.Errorf("no LLM provider configured")
 	}
 	maxIter := r.MaxIterations
-	if maxIter <= 0 {
-		maxIter = 60
+	if maxIter < 0 {
+		maxIter = 0
 	}
 	maxChars := r.MaxToolChars
 	if maxChars <= 0 {
@@ -108,7 +109,7 @@ func (r *Runner) Run(ctx context.Context, req TurnRequest) (TurnResult, error) {
 	}
 	result := TurnResult{}
 
-	for i := 0; i < maxIter; i++ {
+	for i := 0; maxIter == 0 || i < maxIter; i++ {
 		if err := ctx.Err(); err != nil {
 			result.StopReason = "interrupted"
 			return result, err
@@ -246,6 +247,7 @@ func (r *Runner) persist(m llm.Message) {
 }
 
 func (r *Runner) emit(ev Event) {
+	ev.TaskID = r.TaskID
 	if r.Store != nil && r.RunID != "" && ev.Kind != "assistant_delta" {
 		_, _ = r.Store.AddEvent(store.Event{
 			RunID: r.RunID, TaskID: r.TaskID, Kind: ev.Kind, Tool: ev.Tool,

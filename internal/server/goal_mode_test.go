@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/guaidao2/lingeyebot/internal/store"
 )
 
 func TestGoalModeAPIContract(t *testing.T) {
@@ -52,5 +54,43 @@ func TestGoalModeAPIContract(t *testing.T) {
 	}
 	if !got.GoalsEnabled() {
 		t.Fatal("adding a goal should re-enable goal mode")
+	}
+}
+
+func TestPostMessageReactivatesAchievedRun(t *testing.T) {
+	_, st, ts := newTestServer(t, true)
+	project, err := st.EnsureDefaultProject()
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, _, err := st.CreateRun(store.Run{
+		ProjectID: project.ID, Mode: "daily", Target: "achieved.test", Objective: "done",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateRunStatus(run.ID, "achieved"); err != nil {
+		t.Fatal(err)
+	}
+	status, body := request(t, ts, http.MethodPost, "/api/runs/"+run.ID+"/messages", map[string]any{"text": "继续收尾"})
+	if status != http.StatusOK {
+		t.Fatalf("post to achieved: %d %s", status, body)
+	}
+	sess, err := st.EnsureSession(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := st.ListMessages(sess.ID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, msg := range msgs {
+		if msg.Role == "user" && strings.Contains(msg.Content, "继续收尾") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("message to achieved run was not persisted")
 	}
 }

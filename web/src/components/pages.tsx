@@ -930,10 +930,11 @@ function FindingList({
 }
 
 export function TasksPage({
-  tasks, runs, projects, roles, mainPrompts, onOpenConversation, onCancel,
+  tasks, runs, projects, roles, mainPrompts, onOpenConversation, onCancel, taskStreams,
 }: {
   tasks: Task[]; runs: RunSummary[]; projects: ProjectSummary[]; roles: RoleMeta[]; mainPrompts: MainPromptMeta[];
   onOpenConversation: (id: string) => void; onCancel: (id: string) => Promise<void>;
+  taskStreams?: Record<string, string>;
 }) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("");
@@ -1062,18 +1063,19 @@ export function TasksPage({
       ) : null}
       {selected ? (
         <TaskDetailModal task={selected} onClose={() => setSelected(null)}
-          onOpenConversation={onOpenConversation} onCancel={onCancel} />
+          onOpenConversation={onOpenConversation} onCancel={onCancel} liveText={taskStreams?.[selected.id]} />
       ) : null}
     </Page>
   );
 }
 
 export function TaskDetailModal({
-  task, onClose, onOpenConversation, onCancel,
+  task, onClose, onOpenConversation, onCancel, liveText,
 }: {
   task: Task; onClose: () => void;
   onOpenConversation?: (runId: string) => void;
   onCancel?: (taskId: string) => Promise<void>;
+  liveText?: string;
 }) {
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [error, setError] = useState("");
@@ -1104,6 +1106,7 @@ export function TaskDetailModal({
   }, [task.id]);
 
   const current = detail?.task ?? task;
+  const live = liveText || "";
   const run = detail?.run;
   const project = detail?.project;
   const events = detail?.events ?? [];
@@ -1125,7 +1128,7 @@ export function TaskDetailModal({
         <div><span>状态</span><Badge tone={statusTone(current.status)}>{statusLabels[current.status] ?? current.status}</Badge></div>
         <div><span>任务 ID</span><small className="mono">{current.id}</small></div>
         <div><span>所属任务</span><strong>{run?.title ?? current.runId}</strong><small>{project?.name ?? "—"}</small></div>
-        <div><span>预算</span><strong>{current.budget || "默认"}</strong></div>
+        <div><span>预算</span><strong>{current.budget ? String(current.budget) : "不限制"}</strong></div>
         <div><span>创建</span><small>{dateTime(current.createdAt)}</small></div>
         <div><span>开始</span><small>{current.startedAt ? dateTime(current.startedAt) : "—"}</small></div>
         <div><span>结束</span><small>{current.finishedAt ? dateTime(current.finishedAt) : "—"}</small></div>
@@ -1161,6 +1164,13 @@ export function TaskDetailModal({
           </div>
         )}
       </section>
+
+      {live ? (
+        <section className="task-detail-section">
+          <h4>实时输出</h4>
+          <pre className="task-output task-live">{live}</pre>
+        </section>
+      ) : null}
 
       <section className="task-detail-section">
         <h4>结果</h4>

@@ -131,3 +131,43 @@ func TestLoadUpgradesLegacyConfig(t *testing.T) {
 		t.Fatalf("providers = %+v", cfg.Providers)
 	}
 }
+
+func TestLoadMigratesLegacyBudgets(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	legacy := `{
+  "version": 2,
+  "runtime": {"maxIterations": 60, "maxAutoTurns": 40}
+}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LINGEYE_CONFIG", path)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Runtime.MaxIterations != 0 || cfg.Runtime.MaxAutoTurns != 0 {
+		t.Fatalf("legacy budgets were not removed: %+v", cfg.Runtime)
+	}
+}
+
+func TestLoadKeepsExplicitBudgets(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	explicit := `{
+  "version": 3,
+  "runtime": {"maxIterations": 60, "maxAutoTurns": 40}
+}`
+	if err := os.WriteFile(path, []byte(explicit), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LINGEYE_CONFIG", path)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Runtime.MaxIterations != 60 || cfg.Runtime.MaxAutoTurns != 40 {
+		t.Fatalf("explicit budgets were changed: %+v", cfg.Runtime)
+	}
+}

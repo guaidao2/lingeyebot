@@ -28,7 +28,7 @@ func subagentTool(env Env) Spec {
 			"expectedOutput": str("Required context for create: what evidence/result the subagent must return."),
 			"label":          str("Short display label."),
 			"nodeId":         str("Optional intent node this task serves."),
-			"budget":         integer("Optional iteration budget."),
+			"budget":         integer("Optional iteration budget; 0 / omitted = unlimited."),
 			"task_id":        str("Task id for send/cancel/check."),
 			"message":        str("Instruction for send."),
 		}, "action"),

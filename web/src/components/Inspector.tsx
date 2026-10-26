@@ -39,6 +39,7 @@ interface Props {
   onClose: () => void;
   onOpenConversation?: (runId: string) => void;
   onTaskCancel?: (taskId: string) => Promise<void>;
+  taskStreams?: Record<string, string>;
 }
 
 export default function Inspector({
@@ -57,6 +58,7 @@ export default function Inspector({
   onClose,
   onOpenConversation,
   onTaskCancel,
+  taskStreams,
 }: Props) {
   const snapshot = view?.snapshot;
   const review = view?.review.items ?? [];
@@ -96,7 +98,7 @@ export default function Inspector({
 
         {tab === "report" ? <ReportPanel report={report} /> : null}
 
-        {tab === "tasks" ? <TasksPanel tasks={tasks} onOpenConversation={onOpenConversation} onCancel={onTaskCancel} /> : null}
+        {tab === "tasks" ? <TasksPanel tasks={tasks} onOpenConversation={onOpenConversation} onCancel={onTaskCancel} taskStreams={taskStreams} /> : null}
 
         {tab === "status" ? (
           <StatusPanel detail={detail} view={view} audit={audit} />
@@ -252,8 +254,9 @@ function ReportPanel({ report }: { report: string }) {
   );
 }
 
-function TasksPanel({ tasks, onOpenConversation, onCancel }: {
+function TasksPanel({ tasks, onOpenConversation, onCancel, taskStreams }: {
   tasks: Task[]; onOpenConversation?: (runId: string) => void; onCancel?: (taskId: string) => Promise<void>;
+  taskStreams?: Record<string, string>;
 }) {
   const [selected, setSelected] = useState<Task | null>(null);
   if (!tasks.length) {
@@ -278,7 +281,7 @@ function TasksPanel({ tasks, onOpenConversation, onCancel }: {
           {task.error ? <p className="error-text">{task.error}</p> : null}
         </article>
       ))}
-      {selected ? <TaskDetailModal task={selected} onClose={() => setSelected(null)} onOpenConversation={onOpenConversation} onCancel={onCancel} /> : null}
+      {selected ? <TaskDetailModal task={selected} onClose={() => setSelected(null)} onOpenConversation={onOpenConversation} onCancel={onCancel} liveText={taskStreams?.[selected.id]} /> : null}
     </div>
   );
 }

@@ -219,10 +219,6 @@ func (s *Server) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	if run.Status == "achieved" {
-		writeErr(w, http.StatusConflict, fmt.Errorf("任务已完成；如需继续，请新增目标或新建任务"))
-		return
-	}
 	if _, _, ok := s.providerFor(run); !ok {
 		writeErr(w, http.StatusConflict, errNotConfigured)
 		return

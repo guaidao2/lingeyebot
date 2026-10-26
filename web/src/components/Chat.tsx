@@ -185,7 +185,7 @@ export default function Chat({
               : running
                 ? "运行中：输入会打断当前回合并以新指令继续…"
                 : achieved
-                  ? "目标已达成；可新增目标后继续"
+                  ? "目标已达成；仍可继续追问"
                   : goalMode
                     ? "描述目标、授权与下一步（Enter 发送，Shift+Enter 换行）"
                     : "目标模式未启用：描述下一步（Enter 发送）"
@@ -199,7 +199,7 @@ export default function Chat({
               : running
                 ? "可随时插话打断"
                 : achieved
-                  ? "目标已达成，任务已停止"
+                  ? "目标已达成，可继续追问"
                   : paused
                     ? "任务已暂停，可继续"
                     : goalMode

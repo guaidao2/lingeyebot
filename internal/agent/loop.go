@@ -93,7 +93,7 @@ func (l *Loop) Submit(runID, text string) error {
 	}
 	_ = l.Store.TouchRun(runID)
 	_ = l.Store.ResetAutoTurns(runID)
-	if run.Status == "paused" || run.Status == "stalled" || run.Status == "blocked" {
+	if run.Status == "paused" || run.Status == "stalled" || run.Status == "blocked" || run.Status == "achieved" {
 		_ = l.Store.UpdateRunStatus(runID, "active")
 	}
 	st := l.state(runID)
@@ -341,7 +341,7 @@ func (l *Loop) turnLoop(runID string) {
 			return
 		}
 		turns, _ := l.Store.IncrementAutoTurns(runID)
-		if turns > cfg.Runtime.MaxAutoTurns {
+		if cfg.Runtime.MaxAutoTurns > 0 && turns > cfg.Runtime.MaxAutoTurns {
 			l.stall(runID, "自动继续达到上限，等待用户决定")
 			if l.finish(runID) {
 				continue
@@ -358,7 +358,7 @@ func (l *Loop) turnLoop(runID string) {
 		}
 		idle := st.idle
 		st.mu.Unlock()
-		if idle >= 3 {
+		if cfg.Runtime.MaxAutoTurns > 0 && idle >= 3 {
 			l.stall(runID, "连续 3 轮没有产生新事实或证据，等待用户决定")
 			if l.finish(runID) {
 				continue
@@ -415,7 +415,7 @@ func (l *Loop) event(runID, taskID, kind, tool, summary, detail string) {
 		RunID: runID, TaskID: taskID, Kind: kind, Tool: tool, Summary: summary, Detail: detail,
 	})
 	if l.Sink != nil {
-		l.Sink.Emit(runID, Event{Kind: kind, Tool: tool, Summary: summary, Detail: detail})
+		l.Sink.Emit(runID, Event{Kind: kind, Tool: tool, Summary: summary, Detail: detail, TaskID: taskID})
 	}
 }
 
