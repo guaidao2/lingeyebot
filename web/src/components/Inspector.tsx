@@ -228,10 +228,45 @@ function EvidencePanel({ evidence }: { evidence: Evidence[] }) {
   );
 }
 
-function ReportPanel({ report }: { report: string }) {
-  function copy() {
-    void navigator.clipboard.writeText(report).catch(() => undefined);
+async function copyText(text: string): Promise<boolean> {
+  if (!text) return false;
+  if (window.isSecureContext && navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      /* fall through to execCommand for non-secure/denied contexts */
+    }
   }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.top = "-9999px";
+  area.style.opacity = "0";
+  document.body.appendChild(area);
+  try {
+    area.focus();
+    area.select();
+    area.setSelectionRange(0, text.length);
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    document.body.removeChild(area);
+  }
+}
+
+function ReportPanel({ report }: { report: string }) {  const [copyState, setCopyState] = useState<"idle" | "ok" | "fail">("idle");
+
+  async function copy() {
+    const ok = await copyText(report);
+    setCopyState(ok ? "ok" : "fail");
+    if (ok) {
+      window.setTimeout(() => setCopyState("idle"), 1500);
+    }
+  }
+
   function download() {
     const blob = new Blob([report], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -244,7 +279,9 @@ function ReportPanel({ report }: { report: string }) {
   return (
     <div className="panel-stack">
       <div className="report-actions">
-        <button className="ghost-btn" onClick={copy}><Copy size={14} /> 复制</button>
+        <button className="ghost-btn" onClick={() => void copy()}>
+          <Copy size={14} /> {copyState === "ok" ? "已复制" : copyState === "fail" ? "复制失败" : "复制"}
+        </button>
         <button className="ghost-btn" onClick={download}><Download size={14} /> 下载</button>
       </div>
       <div className="report-body">
