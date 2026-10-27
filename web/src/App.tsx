@@ -24,6 +24,12 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function mergePendingMessages(server: Message[], current: Message[], runId: string): Message[] {
+  const ids = new Set(server.map((message) => message.id));
+  const pending = current.filter((message) => message.pending && message.runId === runId && !ids.has(message.id));
+  return pending.length ? [...server, ...pending] : server;
+}
+
 export default function App() {
   const [modes, setModes] = useState<ModeMeta[]>([]);
   const [config, setConfig] = useState<AppConfig | null>(null);
@@ -119,7 +125,7 @@ export default function App() {
         ]);
         if (seq !== requestSeq.current) return;
         setDetail(d);
-        setMessages(m.messages);
+        setMessages((prev) => mergePendingMessages(m.messages, prev, id));
         setSnapView(s);
         setFindings(f);
         setCoverage(a.coverage);
@@ -271,8 +277,26 @@ export default function App() {
             }
           } else if (ev.kind === "assistant") {
             if (taskId) {
-              setTaskStreams((prev) => ({ ...prev, [taskId]: ev.detail ?? prev[taskId] ?? "" }));
+              setTaskStreams((prev) => ({ ...prev, [taskId]: ev.detail || prev[taskId] || "" }));
             } else {
+              const messageId = typeof ev.messageId === "string" ? ev.messageId : "";
+              if (messageId) {
+                const optimistic: Message = {
+                  id: messageId,
+                  sessionId: "",
+                  runId: activeId,
+                  role: "assistant",
+                  content: ev.detail ?? "",
+                  reasoning: ev.reasoning ?? "",
+                  toolCalls: ev.toolCalls ?? null,
+                  visible: true,
+                  pending: true,
+                  createdAt: new Date().toISOString(),
+                };
+                setMessages((prev) => (prev.some((message) => message.id === messageId) ? prev : [...prev, optimistic]));
+              } else {
+                notify("error", "回复已生成，但未能保存到会话，请重试");
+              }
               setStreamingText("");
               setReasoningText("");
             }
@@ -286,7 +310,8 @@ export default function App() {
               {
                 id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, runId: activeId, taskId,
                 kind: ev.kind ?? "", tool: ev.tool ?? "", summary: ev.summary ?? "",
-                detail: ev.detail ?? "", createdAt: new Date().toISOString(),
+                detail: ev.detail ?? "", messageId: ev.messageId ?? "", reasoning: ev.reasoning ?? "",
+                toolCalls: ev.toolCalls, createdAt: new Date().toISOString(),
               },
             ]);
             if (taskId && ev.kind === "subagent" && String(ev.summary ?? "").startsWith("子代理结束")) {

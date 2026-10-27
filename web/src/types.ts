@@ -103,6 +103,7 @@ export interface Message {
   toolCallId?: string;
   name?: string;
   visible: boolean;
+  pending?: boolean;
   createdAt: string;
 }
 
@@ -228,6 +229,9 @@ export interface Event {
   tool: string;
   summary: string;
   detail: string;
+  messageId?: string;
+  reasoning?: string;
+  toolCalls?: ToolCall[];
   createdAt: string;
 }
 

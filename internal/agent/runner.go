@@ -5,19 +5,32 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/guaidao2/lingeyebot/internal/llm"
 	"github.com/guaidao2/lingeyebot/internal/store"
 )
 
+// EventToolCall is the wire form of a tool call carried on an assistant event.
+// Arguments are kept as a string so a truncated/invalid stream chunk cannot
+// make the whole SSE frame fail to marshal.
+type EventToolCall struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments,omitempty"`
+}
+
 // Event is one observable step emitted during a turn.
 type Event struct {
-	Kind    string `json:"kind"`
-	Tool    string `json:"tool,omitempty"`
-	Summary string `json:"summary,omitempty"`
-	Detail  string `json:"detail,omitempty"`
-	TaskID  string `json:"taskId,omitempty"`
+	Kind      string          `json:"kind"`
+	Tool      string          `json:"tool,omitempty"`
+	Summary   string          `json:"summary,omitempty"`
+	Detail    string          `json:"detail,omitempty"`
+	TaskID    string          `json:"taskId,omitempty"`
+	MessageID string          `json:"messageId,omitempty"`
+	Reasoning string          `json:"reasoning,omitempty"`
+	ToolCalls []EventToolCall `json:"toolCalls,omitempty"`
 }
 
 // Sink receives runner events tagged with their run.
@@ -158,14 +171,24 @@ func (r *Runner) Run(ctx context.Context, req TurnRequest) (TurnResult, error) {
 		result.Iterations = i + 1
 		assistant := llm.Message{Role: "assistant", Content: resp.Content, Reasoning: resp.Reasoning, ToolCalls: resp.ToolCalls}
 		msgs = append(msgs, assistant)
-		if resp.Content != "" || resp.Reasoning != "" {
+		saved := r.persist(assistant)
+		if resp.Content != "" || resp.Reasoning != "" || len(resp.ToolCalls) > 0 {
 			summary := Short(resp.Content, 240)
 			if summary == "" {
-				summary = "思考完成"
+				if len(resp.ToolCalls) > 0 {
+					summary = "工具调用"
+				} else {
+					summary = "思考完成"
+				}
 			}
-			r.emit(Event{Kind: "assistant", Summary: summary, Detail: resp.Content})
+			eventCalls := make([]EventToolCall, 0, len(resp.ToolCalls))
+			for _, call := range resp.ToolCalls {
+				eventCalls = append(eventCalls, EventToolCall{
+					ID: call.ID, Name: call.Name, Arguments: string(call.Arguments),
+				})
+			}
+			r.emit(Event{Kind: "assistant", Summary: summary, Detail: resp.Content, Reasoning: resp.Reasoning, MessageID: saved.ID, ToolCalls: eventCalls})
 		}
-		r.persist(assistant)
 		if len(resp.ToolCalls) == 0 {
 			result.Content = resp.Content
 			result.StopReason = "final"
@@ -237,15 +260,15 @@ func (r *Runner) execute(ctx context.Context, call llm.ToolCall) string {
 	return out
 }
 
-func (r *Runner) persist(m llm.Message) {
+func (r *Runner) persist(m llm.Message) store.Message {
 	if r.Store == nil || r.SessionID == "" {
-		return
+		return store.Message{}
 	}
 	var calls json.RawMessage
 	if len(m.ToolCalls) > 0 {
 		calls, _ = json.Marshal(m.ToolCalls)
 	}
-	_, _ = r.Store.AddMessage(store.Message{
+	saved, err := r.Store.AddMessage(store.Message{
 		SessionID:  r.SessionID,
 		RunID:      r.RunID,
 		Role:       m.Role,
@@ -256,6 +279,11 @@ func (r *Runner) persist(m llm.Message) {
 		Name:       m.Name,
 		Visible:    true,
 	})
+	if err != nil {
+		log.Printf("runner: persist %s message: %v", m.Role, err)
+		return store.Message{}
+	}
+	return saved
 }
 
 func (r *Runner) emit(ev Event) {

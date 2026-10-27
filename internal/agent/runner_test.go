@@ -365,7 +365,7 @@ func TestRunnerEmitsAssistantEventForReasoningOnly(t *testing.T) {
 	if !seen || res.StopReason != "final" || res.Content != "" {
 		t.Fatalf("seen=%v result=%+v", seen, res)
 	}
-	if assistant.Summary != "思考完成" || assistant.Detail != "" {
+	if assistant.Summary != "思考完成" || assistant.Detail != "" || assistant.MessageID == "" || assistant.Reasoning != "think" {
 		t.Fatalf("assistant event = %+v", assistant)
 	}
 	msgs, err := st.ListMessages(sess.ID, 100)
@@ -383,6 +383,34 @@ func TestRunnerEmitsAssistantEventForReasoningOnly(t *testing.T) {
 	}
 }
 
+func TestRunnerPersistFailureOmitsMessageID(t *testing.T) {
+	st, run, _ := newTestStore(t)
+	sess, err := st.EnsureSession(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var assistant Event
+	var seen bool
+	r := &Runner{
+		Provider: &contentStreamProvider{}, Model: "m", Store: st, SessionID: sess.ID, RunID: run.ID,
+		Sink: SinkFunc(func(_ string, ev Event) {
+			if ev.Kind == "assistant" && !seen {
+				seen = true
+				assistant = ev
+			}
+		}),
+	}
+	if _, err := r.Run(context.Background(), TurnRequest{Messages: []llm.Message{{Role: "user", Content: "hi"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if !seen || assistant.MessageID != "" {
+		t.Fatalf("persist failure should omit message id: %+v", assistant)
+	}
+}
+
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
@@ -392,35 +420,79 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
-func TestRunnerEmitsAssistantBeforePersisting(t *testing.T) {
+func TestRunnerAssistantEventCarriesMessageID(t *testing.T) {
 	st, run, _ := newTestStore(t)
 	sess, err := st.EnsureSession(run.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	persistedAtEvent := -1
-	checked := false
+	var assistant Event
+	var seen bool
+	var foundAtEvent bool
 	r := &Runner{
 		Provider: &contentStreamProvider{}, Model: "m", Store: st, SessionID: sess.ID, RunID: run.ID,
 		Sink: SinkFunc(func(_ string, ev Event) {
-			if ev.Kind != "assistant" || checked {
-				return
+			if ev.Kind == "assistant" && !seen {
+				seen = true
+				assistant = ev
+				msgs, err := st.ListMessages(sess.ID, 100)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, msg := range msgs {
+					if msg.ID == ev.MessageID && msg.Role == "assistant" && msg.Content == "hello" {
+						foundAtEvent = true
+					}
+				}
 			}
-			checked = true
-			msgs, err := st.ListMessages(sess.ID, 100)
-			if err != nil {
-				t.Fatal(err)
-			}
-			persistedAtEvent = len(msgs)
 		}),
 	}
 	if _, err := r.Run(context.Background(), TurnRequest{Messages: []llm.Message{{Role: "user", Content: "hi"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if !checked {
-		t.Fatal("no assistant event observed")
+	if !seen || assistant.MessageID == "" || !foundAtEvent {
+		t.Fatalf("assistant event does not name a persisted message: %+v", assistant)
 	}
-	if persistedAtEvent != 0 {
-		t.Fatalf("assistant was persisted before emit: %d messages", persistedAtEvent)
+	msgs, err := st.ListMessages(sess.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, msg := range msgs {
+		if msg.ID == assistant.MessageID && msg.Role == "assistant" && msg.Content == "hello" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("assistant event points to missing message: %+v", msgs)
+	}
+}
+
+func TestRunnerEmitsToolCallOnlyAssistantEvent(t *testing.T) {
+	st, run, _ := newTestStore(t)
+	sess, err := st.EnsureSession(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prov := &scriptedProvider{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{{ID: "c1", Name: "echo", Arguments: json.RawMessage(`{"x":1}`)}}},
+		{Content: "done"},
+	}}
+	var first Event
+	var seen bool
+	r := &Runner{
+		Provider: prov, Model: "m", Executor: &fakeExecutor{}, Store: st, SessionID: sess.ID, RunID: run.ID,
+		Sink: SinkFunc(func(_ string, ev Event) {
+			if ev.Kind == "assistant" && !seen {
+				seen = true
+				first = ev
+			}
+		}),
+	}
+	if _, err := r.Run(context.Background(), TurnRequest{Messages: []llm.Message{{Role: "user", Content: "hi"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if !seen || first.Summary != "工具调用" || first.MessageID == "" || len(first.ToolCalls) != 1 {
+		t.Fatalf("tool-only assistant event = %+v", first)
 	}
 }
