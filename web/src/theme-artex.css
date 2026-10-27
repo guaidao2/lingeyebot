@@ -3297,3 +3297,36 @@ button.board-row:hover {
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+
+/* Settings MCP summary: keep it a readable card in both themes instead of a
+   translucent dark strip that turns grey on the light console. */
+.mcp-status {
+  padding: 10px 12px;
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.mcp-status .mcp-row {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.mcp-status .mcp-row:last-child {
+  border-bottom: none;
+}
+
+.mcp-status .muted {
+  color: var(--muted);
+}
+
+html[data-theme="light"] .mcp-status {
+  background: #ffffff;
+  border-color: var(--border);
+}
+
+html[data-theme="light"] .settings-stack textarea {
+  background: #ffffff;
+  color: var(--text);
+}

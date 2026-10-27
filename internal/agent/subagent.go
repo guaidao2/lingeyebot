@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"sync"
 
@@ -107,6 +108,12 @@ func (m *SubagentManager) Spawn(ctx context.Context, runID string, in tool.Spawn
 
 func (m *SubagentManager) execute(run store.Run, task store.Task, prompt string) {
 	defer m.done(task.ID)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			m.report(run.ID, task.ID, "error", "", "子代理内部错误", string(debug.Stack()))
+			m.finish(run, task, "failed", "", fmt.Sprintf("panic: %v", recovered))
+		}
+	}()
 	if current, err := m.Store.GetTask(task.ID); err == nil && current.Status == "cancelled" {
 		return
 	}
@@ -210,6 +217,9 @@ func (m *SubagentManager) finish(run store.Run, task store.Task, status, result,
 		_, _ = m.Store.AddMessage(store.Message{
 			SessionID: parent.ID, RunID: run.ID, Role: "user", Content: announce, Visible: false,
 		})
+	}
+	if _, err := m.Store.ActivateRunIfAchieved(run.ID); err != nil {
+		m.report(run.ID, task.ID, "error", "", "恢复父任务失败", err.Error())
 	}
 	if m.Loop != nil {
 		m.Loop.Wake(run.ID)

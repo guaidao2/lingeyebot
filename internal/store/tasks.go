@@ -139,6 +139,18 @@ func (s *Store) CancelActiveTasks(runID string) error {
 	return err
 }
 
+// RecoverInterruptedTasks closes tasks left queued/running by a previous
+// process. A new process has no goroutine that can ever finish them, so leaving
+// them active would make ActiveTaskCount block the run forever.
+func (s *Store) RecoverInterruptedTasks() error {
+	_, err := s.DB.Exec(`UPDATE tasks
+		SET status='failed',
+		    error=CASE WHEN error='' THEN 'interrupted by restart' ELSE error END,
+		    finished_at=?
+		WHERE status IN ('queued','running')`, nowStr())
+	return err
+}
+
 // ListAllTasks returns recent tasks across all conversations.
 func (s *Store) ListAllTasks(limit int) ([]Task, error) {
 	if limit <= 0 || limit > 500 {

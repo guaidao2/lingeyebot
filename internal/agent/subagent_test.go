@@ -91,6 +91,43 @@ func TestSubagentCancelKeepsPartialResult(t *testing.T) {
 	})
 }
 
+func TestSubagentFinishReactivatesAchievedParent(t *testing.T) {
+	st, run, _ := newTestStore(t)
+	task, err := st.CreateTask(store.Task{RunID: run.ID, Role: "worker", Title: "收尾"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateRunStatus(run.ID, "achieved"); err != nil {
+		t.Fatal(err)
+	}
+	mgr := &SubagentManager{Store: st}
+	mgr.finish(run, task, "done", "子代理结果", "")
+	got, err := st.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "active" {
+		t.Fatalf("achieved parent was not reactivated: %s", got.Status)
+	}
+	sess, err := st.EnsureSession(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := st.ListMessages(sess.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, msg := range msgs {
+		if strings.Contains(msg.Content, "[子代理 worker done]") && !msg.Visible {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("hidden subagent report missing: %+v", msgs)
+	}
+}
+
 func TestSubagentRejectsUnknownRole(t *testing.T) {
 	st, run, _ := newTestStore(t)
 	mgr := &SubagentManager{

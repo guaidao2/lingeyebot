@@ -19,7 +19,7 @@ import (
 	"github.com/guaidao2/lingeyebot/internal/store"
 )
 
-const version = "1.0.4"
+const version = "1.0.5"
 
 func main() {
 	var addr string
@@ -66,6 +66,9 @@ func main() {
 	st, err := store.Open(cfg.DataDir)
 	if err != nil {
 		log.Fatalf("store: %v", err)
+	}
+	if err := st.RecoverInterrupted(); err != nil {
+		log.Fatalf("recovery: %v", err)
 	}
 	skills := skill.New(cfg.Skills)
 	srv, err := server.New(cfg, st, skills, version)

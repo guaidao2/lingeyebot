@@ -232,6 +232,71 @@ func (s *Store) UpdateRunStatus(id, status string) error {
 	return err
 }
 
+// MarkRunAchievedIfActive sets achieved only if no Stop/pause won the race.
+func (s *Store) MarkRunAchievedIfActive(id string) (bool, error) {
+	res, err := s.DB.Exec(`UPDATE runs SET status='achieved', updated_at=? WHERE id=? AND status='active'`, nowStr(), id)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// RecoverInterrupted closes tasks and pauses runs left by a previous process.
+// It is called once at server startup, not from every Store.Open.
+func (s *Store) RecoverInterrupted() error {
+	if err := s.RecoverInterruptedTasks(); err != nil {
+		return err
+	}
+	return s.RecoverInterruptedRuns()
+}
+
+// RecoverInterruptedRuns pauses runs left active by a previous process. There
+// is no live turn goroutine after restart, so leaving them active would make the
+// UI show a phantom running task forever. A control event makes the pause
+// observable instead of silently changing status.
+func (s *Store) RecoverInterruptedRuns() error {
+	rows, err := s.DB.Query(`SELECT id FROM runs WHERE status='active'`)
+	if err != nil {
+		return err
+	}
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, id := range ids {
+		if err := s.UpdateRunStatus(id, "paused"); err != nil {
+			return err
+		}
+		_, _ = s.AddEvent(Event{
+			RunID: id, Kind: "control", Summary: "进程重启，任务已暂停",
+			Detail: "恢复后请检查子代理/继续任务",
+		})
+	}
+	return nil
+}
+
+// ActivateRunIfAchieved reactivates a completed run when a subagent report
+// arrives, without overwriting a user pause/stall.
+func (s *Store) ActivateRunIfAchieved(id string) (bool, error) {
+	res, err := s.DB.Exec(`UPDATE runs SET status='active', updated_at=? WHERE id=? AND status='achieved'`, nowStr(), id)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
 // SetRunModel records which provider/model the run uses.
 func (s *Store) SetRunModel(id, providerID, model string) error {
 	_, err := s.DB.Exec(`UPDATE runs SET provider_id=?, model=?, updated_at=? WHERE id=?`, providerID, model, nowStr(), id)

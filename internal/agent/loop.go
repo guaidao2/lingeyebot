@@ -108,7 +108,9 @@ func (l *Loop) Submit(runID, text string) error {
 
 // Wake asks the loop to run a turn without a new user message. A running turn
 // keeps running; the wake is consumed after it ends.
-func (l *Loop) Wake(runID string) { l.wake(runID, false) }
+func (l *Loop) Wake(runID string) {
+	l.wake(runID, false)
+}
 
 func (l *Loop) wake(runID string, interrupt bool) {
 	st := l.state(runID)
@@ -124,6 +126,11 @@ func (l *Loop) wake(runID string, interrupt bool) {
 	st.running = true
 	st.pending = false
 	st.mu.Unlock()
+	if l.Store != nil {
+		// Only a freshly started turn may revive an achieved run. If a turn is
+		// already running, it will see pending and reactivate itself.
+		_, _ = l.Store.ActivateRunIfAchieved(runID)
+	}
 	go l.turnLoop(runID)
 }
 
@@ -310,6 +317,20 @@ func (l *Loop) turnLoop(runID string) {
 		if pending {
 			continue
 		}
+		active, err := l.Store.ActiveTaskCount(runID)
+		if err != nil {
+			l.fail(runID, "检查子代理状态失败", err)
+			if l.finish(runID) {
+				continue
+			}
+			return
+		}
+		if active > 0 {
+			if l.finish(runID) {
+				continue
+			}
+			return
+		}
 		if !run.GoalsEnabled() {
 			if l.finish(runID) {
 				continue
@@ -319,21 +340,29 @@ func (l *Loop) turnLoop(runID string) {
 
 		settled, err := l.Store.GoalsSettled(runID)
 		if err == nil && settled {
-			_ = l.Store.UpdateRunStatus(runID, "achieved")
-			l.event(runID, "", "goal", "", "全部目标已达成，任务结束", "")
-			if l.finish(runID) {
+			st.mu.Lock()
+			if st.pending {
+				st.pending = false
+				st.mu.Unlock()
 				continue
 			}
+			achieved, err := l.Store.MarkRunAchievedIfActive(runID)
+			if err != nil {
+				st.running = false
+				st.cancel = nil
+				st.mu.Unlock()
+				l.fail(runID, "写入目标完成状态失败", err)
+				return
+			}
+			if achieved {
+				l.event(runID, "", "goal", "", "全部目标已达成，任务结束", "")
+			}
+			st.running = false
+			st.cancel = nil
+			st.mu.Unlock()
 			return
 		}
 
-		active, _ := l.Store.ActiveTaskCount(runID)
-		if active > 0 {
-			if l.finish(runID) {
-				continue
-			}
-			return
-		}
 		if !cfg.Runtime.AutoContinue {
 			if l.finish(runID) {
 				continue

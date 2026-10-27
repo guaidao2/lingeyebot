@@ -130,6 +130,33 @@ func (blockingProvider) Chat(ctx context.Context, _ llm.Request) (llm.Response, 
 	return llm.Response{}, ctx.Err()
 }
 
+func TestLoopWaitsForActiveTaskBeforeAchieved(t *testing.T) {
+	st, run, goal := newTestStore(t)
+	if _, err := st.ProveGoal(goal.ID, nil, "met"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateTask(store.Task{RunID: run.ID, Role: "worker", Title: "pending"}); err != nil {
+		t.Fatal(err)
+	}
+	prov := &scriptedProvider{responses: []llm.Response{{Content: "等待子代理"}}}
+	cfg := config.Default()
+	cfg.Runtime.AutoContinue = false
+	loop := newTestLoop(st, prov, cfg)
+	defer loop.Shutdown()
+
+	if err := loop.Submit(run.ID, "开始"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 3*time.Second, func() bool { return !loop.Running(run.ID) })
+	got, err := st.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "active" {
+		t.Fatalf("run with active subagent should stay active, got %s", got.Status)
+	}
+}
+
 func TestLoopStopInvokesOnStop(t *testing.T) {
 	st, run, _ := newTestStore(t)
 	cfg := config.Default()
