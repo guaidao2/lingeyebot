@@ -57,6 +57,7 @@ export default function App() {
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
   const [streamingText, setStreamingText] = useState("");
+  const [reasoningText, setReasoningText] = useState("");
   const [taskStreams, setTaskStreams] = useState<Record<string, string>>({});
   const [mcpStatus, setMcpStatus] = useState<MCPStatus[]>([]);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
@@ -210,6 +211,7 @@ export default function App() {
     if (!activeId) return;
     setSelectedNode(null);
     setStreamingText("");
+    setReasoningText("");
     void refresh(activeId);
   }, [activeId, refresh]);
 
@@ -235,6 +237,7 @@ export default function App() {
 
   useEffect(() => {
     setStreamingText("");
+    setReasoningText("");
   }, [activeId, view]);
 
   useEffect(() => {
@@ -256,7 +259,11 @@ export default function App() {
         if (frame.type === "event" && frame.event) {
           const ev = frame.event;
           const taskId = typeof ev.taskId === "string" ? ev.taskId : "";
-          if (ev.kind === "assistant_delta") {
+          if (ev.kind === "assistant_reasoning_delta") {
+            if (!taskId) {
+              setReasoningText((prev) => prev + (ev.detail ?? ""));
+            }
+          } else if (ev.kind === "assistant_delta") {
             if (taskId) {
               setTaskStreams((prev) => ({ ...prev, [taskId]: (prev[taskId] ?? "") + (ev.detail ?? "") }));
             } else {
@@ -267,11 +274,13 @@ export default function App() {
               setTaskStreams((prev) => ({ ...prev, [taskId]: ev.detail ?? prev[taskId] ?? "" }));
             } else {
               setStreamingText("");
+              setReasoningText("");
             }
           } else if (!taskId && (ev.kind === "tool_call" || ev.kind === "error" || ev.kind === "notice")) {
             setStreamingText("");
+            setReasoningText("");
           }
-          if (ev.kind !== "assistant_delta") {
+          if (ev.kind !== "assistant_delta" && ev.kind !== "assistant_reasoning_delta") {
             setEvents((prev) => [
               ...prev.slice(-399),
               {
@@ -371,6 +380,7 @@ export default function App() {
   async function send(text: string) {
     if (!activeId) return;
     setStreamingText("");
+    setReasoningText("");
     setBusy(true);
     try {
       await api.send(activeId, text);
@@ -646,6 +656,7 @@ export default function App() {
               approvals={approvals}
               events={events.filter((event) => !event.taskId)}
               streaming={streamingText}
+              reasoning={reasoningText}
               busy={busy}
               modelConfigured={Boolean(runProvider?.baseUrl && runProvider?.model)}
               onOpenSettings={() => setShowSettings(true)}

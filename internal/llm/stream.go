@@ -12,8 +12,20 @@ import (
 	"strings"
 )
 
-// ChatStream performs an OpenAI-compatible streaming call.
+// ChatStream performs an OpenAI-compatible streaming call. Content deltas are
+// delivered through onDelta; reasoning deltas are available via
+// ChatStreamWithReasoning.
 func (p *OpenAI) ChatStream(ctx context.Context, req Request, onDelta func(string)) (Response, error) {
+	return p.chatStream(ctx, req, onDelta, nil)
+}
+
+// ChatStreamWithReasoning is the streaming variant that also reports
+// reasoning_content/reasoning deltas while the model is thinking.
+func (p *OpenAI) ChatStreamWithReasoning(ctx context.Context, req Request, onContent, onReasoning func(string)) (Response, error) {
+	return p.chatStream(ctx, req, onContent, onReasoning)
+}
+
+func (p *OpenAI) chatStream(ctx context.Context, req Request, onDelta, onReasoning func(string)) (Response, error) {
 	messages := make([]openAIMessage, 0, len(req.Messages)+1)
 	if strings.TrimSpace(req.System) != "" {
 		messages = append(messages, openAIMessage{Role: "system", Content: req.System})
@@ -133,9 +145,15 @@ func (p *OpenAI) ChatStream(ctx context.Context, req Request, onDelta func(strin
 		for _, choice := range chunk.Choices {
 			if choice.Delta.ReasoningContent != nil {
 				result.Reasoning += *choice.Delta.ReasoningContent
+				if onReasoning != nil && *choice.Delta.ReasoningContent != "" {
+					onReasoning(*choice.Delta.ReasoningContent)
+				}
 			}
 			if choice.Delta.Reasoning != nil {
 				result.Reasoning += *choice.Delta.Reasoning
+				if onReasoning != nil && *choice.Delta.Reasoning != "" {
+					onReasoning(*choice.Delta.Reasoning)
+				}
 			}
 			if choice.Delta.Content != nil && *choice.Delta.Content != "" {
 				content.WriteString(*choice.Delta.Content)
@@ -185,6 +203,15 @@ func (p *OpenAI) ChatStream(ctx context.Context, req Request, onDelta func(strin
 
 // ChatStream performs an Anthropic Messages streaming call.
 func (p *Anthropic) ChatStream(ctx context.Context, req Request, onDelta func(string)) (Response, error) {
+	return p.chatStream(ctx, req, onDelta, nil)
+}
+
+// ChatStreamWithReasoning reports thinking deltas separately from text.
+func (p *Anthropic) ChatStreamWithReasoning(ctx context.Context, req Request, onContent, onReasoning func(string)) (Response, error) {
+	return p.chatStream(ctx, req, onContent, onReasoning)
+}
+
+func (p *Anthropic) chatStream(ctx context.Context, req Request, onDelta, onReasoning func(string)) (Response, error) {
 	messages := make([]anthropicMessage, 0, len(req.Messages))
 	for _, m := range req.Messages {
 		switch m.Role {
@@ -329,6 +356,9 @@ func (p *Anthropic) ChatStream(ctx context.Context, req Request, onDelta func(st
 				}
 			case "thinking_delta":
 				result.Reasoning += event.Delta.Thinking
+				if onReasoning != nil && event.Delta.Thinking != "" {
+					onReasoning(event.Delta.Thinking)
+				}
 			case "input_json_delta":
 				state.kind = "tool_use"
 				state.args.WriteString(event.Delta.PartialJSON)

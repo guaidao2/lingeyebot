@@ -70,6 +70,13 @@ type StreamProvider interface {
 	ChatStream(ctx context.Context, req Request, onDelta func(string)) (Response, error)
 }
 
+// ReasoningStreamProvider is an optional streaming backend that reports
+// reasoning_content/thinking deltas separately from visible content.
+type ReasoningStreamProvider interface {
+	Provider
+	ChatStreamWithReasoning(ctx context.Context, req Request, onContent, onReasoning func(string)) (Response, error)
+}
+
 // Config configures a protocol adapter.
 type Config struct {
 	ID               string

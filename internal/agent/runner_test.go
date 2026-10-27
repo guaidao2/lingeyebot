@@ -255,3 +255,172 @@ func TestRunnerEventCarriesTaskID(t *testing.T) {
 		t.Fatalf("event = %+v", got)
 	}
 }
+
+type reasoningStreamProvider struct{}
+
+func (p *reasoningStreamProvider) ID() string { return "reasoning-stream" }
+func (p *reasoningStreamProvider) Chat(context.Context, llm.Request) (llm.Response, error) {
+	return llm.Response{Content: "answer", Reasoning: "think"}, nil
+}
+func (p *reasoningStreamProvider) ChatStreamWithReasoning(_ context.Context, _ llm.Request, onContent, onReasoning func(string)) (llm.Response, error) {
+	onReasoning("think")
+	onContent("answer")
+	return llm.Response{Content: "answer", Reasoning: "think"}, nil
+}
+
+func TestRunnerStreamsReasoningWithoutPersistingDeltas(t *testing.T) {
+	st, run, _ := newTestStore(t)
+	sess, err := st.EnsureSession(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	r := &Runner{
+		Provider: &reasoningStreamProvider{}, Model: "m", Store: st, SessionID: sess.ID, RunID: run.ID,
+		Sink: SinkFunc(func(_ string, ev Event) { kinds = append(kinds, ev.Kind) }),
+	}
+	res, err := r.Run(context.Background(), TurnRequest{Messages: []llm.Message{{Role: "user", Content: "hi"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StopReason != "final" || res.Content != "answer" {
+		t.Fatalf("result = %+v", res)
+	}
+	if !containsString(kinds, "assistant_reasoning_delta") || !containsString(kinds, "assistant_delta") {
+		t.Fatalf("kinds = %v", kinds)
+	}
+	events, err := st.ListEvents(run.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Kind == "assistant_reasoning_delta" || event.Kind == "assistant_delta" {
+			t.Fatalf("stream delta persisted: %+v", event)
+		}
+	}
+}
+
+type contentStreamProvider struct{}
+
+func (p *contentStreamProvider) ID() string { return "content-stream" }
+func (p *contentStreamProvider) Chat(context.Context, llm.Request) (llm.Response, error) {
+	return llm.Response{Content: "hello"}, nil
+}
+func (p *contentStreamProvider) ChatStream(_ context.Context, _ llm.Request, onDelta func(string)) (llm.Response, error) {
+	onDelta("hello")
+	return llm.Response{Content: "hello"}, nil
+}
+
+func TestRunnerFallsBackToContentStream(t *testing.T) {
+	st, run, _ := newTestStore(t)
+	sess, err := st.EnsureSession(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	r := &Runner{
+		Provider: &contentStreamProvider{}, Model: "m", Store: st, SessionID: sess.ID, RunID: run.ID,
+		Sink: SinkFunc(func(_ string, ev Event) { kinds = append(kinds, ev.Kind) }),
+	}
+	if _, err := r.Run(context.Background(), TurnRequest{Messages: []llm.Message{{Role: "user", Content: "hi"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(kinds, "assistant_delta") {
+		t.Fatalf("content stream fallback not used: %v", kinds)
+	}
+}
+
+type reasoningOnlyProvider struct{}
+
+func (p *reasoningOnlyProvider) ID() string { return "reasoning-only" }
+func (p *reasoningOnlyProvider) Chat(context.Context, llm.Request) (llm.Response, error) {
+	return llm.Response{Reasoning: "think"}, nil
+}
+func (p *reasoningOnlyProvider) ChatStreamWithReasoning(_ context.Context, _ llm.Request, _, onReasoning func(string)) (llm.Response, error) {
+	onReasoning("think")
+	return llm.Response{Reasoning: "think"}, nil
+}
+
+func TestRunnerEmitsAssistantEventForReasoningOnly(t *testing.T) {
+	st, run, _ := newTestStore(t)
+	sess, err := st.EnsureSession(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var assistant Event
+	var seen bool
+	r := &Runner{
+		Provider: &reasoningOnlyProvider{}, Model: "m", Store: st, SessionID: sess.ID, RunID: run.ID,
+		Sink: SinkFunc(func(_ string, ev Event) {
+			if ev.Kind == "assistant" && !seen {
+				seen = true
+				assistant = ev
+			}
+		}),
+	}
+	res, err := r.Run(context.Background(), TurnRequest{Messages: []llm.Message{{Role: "user", Content: "hi"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !seen || res.StopReason != "final" || res.Content != "" {
+		t.Fatalf("seen=%v result=%+v", seen, res)
+	}
+	if assistant.Summary != "思考完成" || assistant.Detail != "" {
+		t.Fatalf("assistant event = %+v", assistant)
+	}
+	msgs, err := st.ListMessages(sess.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, msg := range msgs {
+		if msg.Role == "assistant" && msg.Reasoning == "think" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("reasoning-only message not persisted: %+v", msgs)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRunnerEmitsAssistantBeforePersisting(t *testing.T) {
+	st, run, _ := newTestStore(t)
+	sess, err := st.EnsureSession(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persistedAtEvent := -1
+	checked := false
+	r := &Runner{
+		Provider: &contentStreamProvider{}, Model: "m", Store: st, SessionID: sess.ID, RunID: run.ID,
+		Sink: SinkFunc(func(_ string, ev Event) {
+			if ev.Kind != "assistant" || checked {
+				return
+			}
+			checked = true
+			msgs, err := st.ListMessages(sess.ID, 100)
+			if err != nil {
+				t.Fatal(err)
+			}
+			persistedAtEvent = len(msgs)
+		}),
+	}
+	if _, err := r.Run(context.Background(), TurnRequest{Messages: []llm.Message{{Role: "user", Content: "hi"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if !checked {
+		t.Fatal("no assistant event observed")
+	}
+	if persistedAtEvent != 0 {
+		t.Fatalf("assistant was persisted before emit: %d messages", persistedAtEvent)
+	}
+}

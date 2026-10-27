@@ -12,6 +12,7 @@ interface Props {
   approvals: Approval[];
   events: Event[];
   streaming?: string;
+  reasoning?: string;
   busy: boolean;
   modelConfigured: boolean;
   onOpenSettings: () => void;
@@ -36,6 +37,7 @@ export default function Chat({
   approvals,
   events,
   streaming,
+  reasoning,
   busy,
   modelConfigured,
   onOpenSettings,
@@ -73,7 +75,7 @@ export default function Chat({
     if (stickToBottom.current) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [detail.run.id, messages, approvals, events.length, streaming]);
+  }, [detail.run.id, messages, approvals, events.length, streaming, reasoning]);
 
   async function submit() {
     const value = text.trim();
@@ -130,12 +132,24 @@ export default function Chat({
 
         {messages.length > 0 ? <ConversationTurns messages={messages} /> : null}
 
-        {streaming ? (
+        {(streaming || reasoning) ? (
           <div className="msg assistant">
             <div className="avatar"><Eye size={15} /></div>
             <div className="msg-body">
-              <div className="msg-head"><span>lingeyebot</span><span className="muted">生成中…</span></div>
-              <Markdown content={streaming} />
+              <div className="msg-head">
+                <span>lingeyebot</span>
+                <span className="muted">生成中…</span>
+              </div>
+              {reasoning ? (
+                <Collapsible
+                  title={<span className="thought-title"><Brain size={14} /> 思考</span>}
+                  meta={<span>{reasoning.length} 字符</span>}
+                  defaultOpen
+                >
+                  <div className="reasoning-text"><Markdown content={reasoning} /></div>
+                </Collapsible>
+              ) : null}
+              {streaming ? <Markdown content={streaming} /> : null}
             </div>
           </div>
         ) : null}

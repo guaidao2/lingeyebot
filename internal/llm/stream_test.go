@@ -72,3 +72,73 @@ func TestAnthropicStreamDeltasAndToolUse(t *testing.T) {
 		t.Fatalf("tool calls = %+v", resp.ToolCalls)
 	}
 }
+
+func TestOpenAIStreamReasoningDeltas(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		chunks := []string{
+			`{"choices":[{"delta":{"reasoning_content":"先"}}]}`,
+			`{"choices":[{"delta":{"reasoning_content":"想"}}]}`,
+			`{"choices":[{"delta":{"content":"答案"}}]}`,
+			`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		}
+		for _, chunk := range chunks {
+			fmt.Fprintf(w, "data: %s\n\n", chunk)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	p := NewOpenAI(Config{BaseURL: srv.URL, APIKey: "k", Model: "m"}, srv.Client())
+	var reasoning, content strings.Builder
+	resp, err := p.ChatStreamWithReasoning(context.Background(), Request{Messages: []Message{{Role: "user", Content: "hi"}}}, func(delta string) {
+		content.WriteString(delta)
+	}, func(delta string) {
+		reasoning.WriteString(delta)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reasoning.String() != "先想" {
+		t.Fatalf("reasoning deltas = %q", reasoning.String())
+	}
+	if content.String() != "答案" || resp.Content != "答案" {
+		t.Fatalf("content delta=%q response=%q", content.String(), resp.Content)
+	}
+	if resp.Reasoning != "先想" {
+		t.Fatalf("response reasoning = %q", resp.Reasoning)
+	}
+}
+
+func TestAnthropicStreamReasoningDeltas(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		events := []string{
+			`{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"先想"}}`,
+			`{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"答案"}}`,
+			`{"type":"message_delta","delta":{"stop_reason":"end_turn"}}`,
+		}
+		for _, event := range events {
+			fmt.Fprintf(w, "data: %s\n\n", event)
+		}
+	}))
+	defer srv.Close()
+
+	p := NewAnthropic(Config{BaseURL: srv.URL, APIKey: "k", Model: "m"}, srv.Client())
+	var reasoning, content strings.Builder
+	resp, err := p.ChatStreamWithReasoning(context.Background(), Request{Messages: []Message{{Role: "user", Content: "hi"}}}, func(delta string) {
+		content.WriteString(delta)
+	}, func(delta string) {
+		reasoning.WriteString(delta)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reasoning.String() != "先想" || resp.Reasoning != "先想" {
+		t.Fatalf("reasoning=%q response=%q", reasoning.String(), resp.Reasoning)
+	}
+	if content.String() != "答案" || resp.Content != "答案" {
+		t.Fatalf("content=%q response=%q", content.String(), resp.Content)
+	}
+}

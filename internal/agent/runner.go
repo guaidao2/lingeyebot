@@ -135,7 +135,15 @@ func (r *Runner) Run(ctx context.Context, req TurnRequest) (TurnResult, error) {
 		}
 		var resp llm.Response
 		var err error
-		if streamer, ok := r.Provider.(llm.StreamProvider); ok {
+		if streamer, ok := r.Provider.(llm.ReasoningStreamProvider); ok {
+			resp, err = streamer.ChatStreamWithReasoning(ctx, llmReq,
+				func(delta string) {
+					r.emit(Event{Kind: "assistant_delta", Detail: delta})
+				},
+				func(delta string) {
+					r.emit(Event{Kind: "assistant_reasoning_delta", Detail: delta})
+				})
+		} else if streamer, ok := r.Provider.(llm.StreamProvider); ok {
 			resp, err = streamer.ChatStream(ctx, llmReq, func(delta string) {
 				r.emit(Event{Kind: "assistant_delta", Detail: delta})
 			})
@@ -150,10 +158,14 @@ func (r *Runner) Run(ctx context.Context, req TurnRequest) (TurnResult, error) {
 		result.Iterations = i + 1
 		assistant := llm.Message{Role: "assistant", Content: resp.Content, Reasoning: resp.Reasoning, ToolCalls: resp.ToolCalls}
 		msgs = append(msgs, assistant)
-		r.persist(assistant)
-		if resp.Content != "" {
-			r.emit(Event{Kind: "assistant", Summary: Short(resp.Content, 240), Detail: resp.Content})
+		if resp.Content != "" || resp.Reasoning != "" {
+			summary := Short(resp.Content, 240)
+			if summary == "" {
+				summary = "思考完成"
+			}
+			r.emit(Event{Kind: "assistant", Summary: summary, Detail: resp.Content})
 		}
+		r.persist(assistant)
 		if len(resp.ToolCalls) == 0 {
 			result.Content = resp.Content
 			result.StopReason = "final"
@@ -248,7 +260,7 @@ func (r *Runner) persist(m llm.Message) {
 
 func (r *Runner) emit(ev Event) {
 	ev.TaskID = r.TaskID
-	if r.Store != nil && r.RunID != "" && ev.Kind != "assistant_delta" {
+	if r.Store != nil && r.RunID != "" && ev.Kind != "assistant_delta" && ev.Kind != "assistant_reasoning_delta" {
 		_, _ = r.Store.AddEvent(store.Event{
 			RunID: r.RunID, TaskID: r.TaskID, Kind: ev.Kind, Tool: ev.Tool,
 			Summary: ev.Summary, Detail: Short(ev.Detail, 4000),
