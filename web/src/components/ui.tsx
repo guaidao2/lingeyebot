@@ -31,14 +31,25 @@ export function Modal({
   wide?: boolean;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
   useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+  useEffect(() => {
+    // Focus the dialog exactly once on mount. Depending on `onClose` here
+    // re-runs this effect whenever the parent re-renders and steals focus
+    // from an input the user is typing in.
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") onCloseRef.current();
     };
     document.addEventListener("keydown", onKey);
     dialogRef.current?.focus();
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      if (previous && previous.isConnected) previous.focus();
+    };
+  }, []);
   return (
     <div className="modal-backdrop">
       <div ref={dialogRef} tabIndex={-1} className={`modal ${wide ? "modal-wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby="modal-title">
