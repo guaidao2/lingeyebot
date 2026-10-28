@@ -35,6 +35,9 @@ func TestOpenRecoversInterruptedState(t *testing.T) {
 	if gotRun.Status != "paused" {
 		t.Fatalf("run status = %s, want paused", gotRun.Status)
 	}
+	if gotRun.PauseReason != PauseReasonRestart {
+		t.Fatalf("pause reason = %q, want %q", gotRun.PauseReason, PauseReasonRestart)
+	}
 	gotTask, err := reopened.GetTask(task.ID)
 	if err != nil {
 		t.Fatal(err)

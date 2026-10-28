@@ -36,10 +36,15 @@ func MessagesFromStore(msgs []store.Message) []llm.Message {
 		switch m.Role {
 		case "assistant":
 			flush()
-			lm := llm.Message{Role: "assistant", Content: m.Content}
+			lm := llm.Message{Role: "assistant", Content: m.Content, Reasoning: m.Reasoning, ReasoningSignature: m.ReasoningSignature}
 			if len(m.ToolCalls) > 0 && string(m.ToolCalls) != "null" {
 				_ = json.Unmarshal(m.ToolCalls, &lm.ToolCalls)
 			}
+			// A message whose only payload is reasoning cannot be replayed
+			// portably: most providers reject an assistant turn with neither
+			// content nor tool calls. Keep it only when there is something
+			// sendable; providers that need reasoning replay (DeepSeek) get an
+			// empty reasoning_content backfilled for every assistant they do see.
 			if lm.Content == "" && len(lm.ToolCalls) == 0 {
 				continue
 			}

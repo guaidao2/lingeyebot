@@ -16,8 +16,12 @@ type Run struct {
 	Authorization string `json:"authorization"`
 	Scope         string `json:"scope"`
 	Status        string `json:"status"`
-	ProviderID    string `json:"providerId"`
-	Model         string `json:"model"`
+	// PauseReason records why a run is paused (typed, never user text), so a
+	// late subagent report can resume an error pause without reviving a run the
+	// user deliberately stopped.
+	PauseReason string `json:"pauseReason,omitempty"`
+	ProviderID  string `json:"providerId"`
+	Model       string `json:"model"`
 	// GoalMode nil means a legacy run with goal mode enabled. New tasks
 	// created via the API set this explicitly; the UI defaults it to off.
 	GoalMode   *bool  `json:"goalMode,omitempty"`
@@ -171,17 +175,18 @@ type InboxMessage struct {
 
 // Message is one persisted conversation turn.
 type Message struct {
-	ID         string          `json:"id"`
-	SessionID  string          `json:"sessionId"`
-	RunID      string          `json:"runId"`
-	Role       string          `json:"role"`
-	Content    string          `json:"content"`
-	Reasoning  string          `json:"reasoning,omitempty"`
-	ToolCalls  json.RawMessage `json:"toolCalls,omitempty"`
-	ToolCallID string          `json:"toolCallId,omitempty"`
-	Name       string          `json:"name,omitempty"`
-	Visible    bool            `json:"visible"`
-	CreatedAt  string          `json:"createdAt"`
+	ID                 string          `json:"id"`
+	SessionID          string          `json:"sessionId"`
+	RunID              string          `json:"runId"`
+	Role               string          `json:"role"`
+	Content            string          `json:"content"`
+	Reasoning          string          `json:"reasoning,omitempty"`
+	ReasoningSignature string          `json:"reasoningSignature,omitempty"`
+	ToolCalls          json.RawMessage `json:"toolCalls,omitempty"`
+	ToolCallID         string          `json:"toolCallId,omitempty"`
+	Name               string          `json:"name,omitempty"`
+	Visible            bool            `json:"visible"`
+	CreatedAt          string          `json:"createdAt"`
 }
 
 // Approval is a pending tool-call confirmation.

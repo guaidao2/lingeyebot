@@ -7,7 +7,16 @@ import (
 	"strings"
 )
 
-const runColumns = `id, project_id, title, mode, target, objective, authorization, scope, status, provider_id, model, goal_mode, auto_turns, last_user_at, created_at, updated_at`
+const runColumns = `id, project_id, title, mode, target, objective, authorization, scope, status, pause_reason, provider_id, model, goal_mode, auto_turns, last_user_at, created_at, updated_at`
+
+// Typed pause reasons. Only PauseReasonError may be resumed automatically by an
+// inbound subagent report: a user stop must stay stopped, and a process restart
+// has no live subagents left to report.
+const (
+	PauseReasonUserStop = "user_stop"
+	PauseReasonError    = "error"
+	PauseReasonRestart  = "restart"
+)
 
 // CreateRun inserts a conversation and, when goal mode is enabled, its first
 // goal. A nil GoalMode preserves legacy behaviour (enabled).
@@ -44,9 +53,9 @@ func (s *Store) CreateRun(run Run) (Run, Goal, error) {
 	if run.Status == "" {
 		run.Status = "active"
 	}
-	_, err := s.DB.Exec(`INSERT INTO runs (`+runColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err := s.DB.Exec(`INSERT INTO runs (`+runColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		run.ID, run.ProjectID, run.Title, run.Mode, run.Target, run.Objective, run.Authorization, run.Scope,
-		run.Status, run.ProviderID, run.Model, goalMode, 0, "", run.CreatedAt, run.UpdatedAt)
+		run.Status, run.PauseReason, run.ProviderID, run.Model, goalMode, 0, "", run.CreatedAt, run.UpdatedAt)
 	if err != nil {
 		return run, Goal{}, fmt.Errorf("insert run: %w", err)
 	}
@@ -217,7 +226,7 @@ func scanRun(row rowScanner) (Run, error) {
 	var r Run
 	var goalMode int
 	err := row.Scan(&r.ID, &r.ProjectID, &r.Title, &r.Mode, &r.Target, &r.Objective, &r.Authorization, &r.Scope,
-		&r.Status, &r.ProviderID, &r.Model, &goalMode, &r.AutoTurns, &r.LastUserAt, &r.CreatedAt, &r.UpdatedAt)
+		&r.Status, &r.PauseReason, &r.ProviderID, &r.Model, &goalMode, &r.AutoTurns, &r.LastUserAt, &r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		return r, err
 	}
@@ -226,10 +235,41 @@ func scanRun(row rowScanner) (Run, error) {
 	return r, nil
 }
 
-// UpdateRunStatus changes a run's status.
+// UpdateRunStatus changes a run's status without recording a pause reason.
+// Every transition clears pause_reason: a status written through this method is
+// never an "error pause", so a stale reason can never authorize an auto-resume.
+// Use PauseRun when the pause reason matters.
 func (s *Store) UpdateRunStatus(id, status string) error {
-	_, err := s.DB.Exec(`UPDATE runs SET status=?, updated_at=? WHERE id=?`, status, nowStr(), id)
+	_, err := s.DB.Exec(`UPDATE runs SET status=?, pause_reason='', updated_at=? WHERE id=?`, status, nowStr(), id)
 	return err
+}
+
+// PauseRun pauses a run and records the typed reason.
+func (s *Store) PauseRun(id, reason string) error {
+	_, err := s.DB.Exec(`UPDATE runs SET status='paused', pause_reason=?, updated_at=? WHERE id=?`, reason, nowStr(), id)
+	return err
+}
+
+// PauseRunByError pauses a run after a turn failure unless the user already
+// stopped it. The guard lives in SQL so it cannot race Stop.
+func (s *Store) PauseRunByError(id string) error {
+	_, err := s.DB.Exec(`UPDATE runs SET status='paused', pause_reason=?, updated_at=?
+		WHERE id=? AND NOT (status='paused' AND pause_reason=?)`,
+		PauseReasonError, nowStr(), id, PauseReasonUserStop)
+	return err
+}
+
+// ActivateRunIfPausedByError resumes a run paused by a turn error. The update is
+// conditional in SQL so it is atomic against Stop/PauseRun: a late subagent
+// report can revive an error pause but never a user stop or a restart pause.
+func (s *Store) ActivateRunIfPausedByError(id string) (bool, error) {
+	res, err := s.DB.Exec(`UPDATE runs SET status='active', pause_reason='', updated_at=?
+		WHERE id=? AND status='paused' AND pause_reason=?`, nowStr(), id, PauseReasonError)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // MarkRunAchievedIfActive sets achieved only if no Stop/pause won the race.
@@ -275,7 +315,7 @@ func (s *Store) RecoverInterruptedRuns() error {
 	}
 	rows.Close()
 	for _, id := range ids {
-		if err := s.UpdateRunStatus(id, "paused"); err != nil {
+		if err := s.PauseRun(id, PauseReasonRestart); err != nil {
 			return err
 		}
 		_, _ = s.AddEvent(Event{

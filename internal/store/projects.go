@@ -20,7 +20,13 @@ func (s *Store) migrate() error {
 	if err := s.ensureColumn("messages", "reasoning", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	if err := s.ensureColumn("messages", "reasoning_signature", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	if err := s.ensureColumn("runs", "goal_mode", "INTEGER NOT NULL DEFAULT 1"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("runs", "pause_reason", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 	if _, err := s.DB.Exec(`CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id, created_at DESC)`); err != nil {

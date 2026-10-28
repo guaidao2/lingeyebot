@@ -13,6 +13,8 @@ func estimateTokens(messages []llm.Message) int {
 	total := 0
 	for _, message := range messages {
 		total += len(message.Content)
+		total += len(message.Reasoning)
+		total += len(message.ReasoningSignature)
 		for _, call := range message.ToolCalls {
 			total += len(call.Name) + len(call.Arguments)
 		}
@@ -60,7 +62,7 @@ func summarize(ctx context.Context, provider llm.Provider, model string, message
 	}
 	response, err := provider.Chat(ctx, llm.Request{
 		Model: model, System: "You compact a security agent's working memory. Be accurate and terse.",
-		Messages: prompt, MaxTokens: 700,
+		Messages: prompt, MaxTokens: 700, DisableReasoning: true,
 	})
 	if err != nil {
 		return "", err

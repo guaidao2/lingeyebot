@@ -169,7 +169,7 @@ func (r *Runner) Run(ctx context.Context, req TurnRequest) (TurnResult, error) {
 			return result, err
 		}
 		result.Iterations = i + 1
-		assistant := llm.Message{Role: "assistant", Content: resp.Content, Reasoning: resp.Reasoning, ToolCalls: resp.ToolCalls}
+		assistant := llm.Message{Role: "assistant", Content: resp.Content, Reasoning: resp.Reasoning, ReasoningSignature: resp.ReasoningSignature, ToolCalls: resp.ToolCalls}
 		msgs = append(msgs, assistant)
 		saved := r.persist(assistant)
 		if resp.Content != "" || resp.Reasoning != "" || len(resp.ToolCalls) > 0 {
@@ -269,15 +269,16 @@ func (r *Runner) persist(m llm.Message) store.Message {
 		calls, _ = json.Marshal(m.ToolCalls)
 	}
 	saved, err := r.Store.AddMessage(store.Message{
-		SessionID:  r.SessionID,
-		RunID:      r.RunID,
-		Role:       m.Role,
-		Content:    m.Content,
-		Reasoning:  m.Reasoning,
-		ToolCalls:  calls,
-		ToolCallID: m.ToolCallID,
-		Name:       m.Name,
-		Visible:    true,
+		SessionID:          r.SessionID,
+		RunID:              r.RunID,
+		Role:               m.Role,
+		Content:            m.Content,
+		Reasoning:          m.Reasoning,
+		ReasoningSignature: m.ReasoningSignature,
+		ToolCalls:          calls,
+		ToolCallID:         m.ToolCallID,
+		Name:               m.Name,
+		Visible:            true,
 	})
 	if err != nil {
 		log.Printf("runner: persist %s message: %v", m.Role, err)

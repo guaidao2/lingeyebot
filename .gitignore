@@ -40,3 +40,6 @@ web/dist/
 # Embedded UI build output (kept out of git; scripts/build.sh fills it)
 /internal/server/dist/*
 !/internal/server/dist/.gitkeep
+
+# Local agent handoff notes (never commit)
+/AGENTS.md

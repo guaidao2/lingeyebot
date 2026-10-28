@@ -36,6 +36,11 @@ type runState struct {
 	mu      sync.Mutex
 	running bool
 	pending bool
+	// stopped marks an explicit user Stop. Set before the in-flight turn is
+	// cancelled and only cleared by Submit/Resume, so a turn that is still
+	// starting cannot slip past a stop and a late subagent report cannot
+	// restart a run the user paused.
+	stopped bool
 	cancel  context.CancelFunc
 	lastSig string
 	idle    int
@@ -78,8 +83,7 @@ func (l *Loop) Running(runID string) bool {
 
 // Submit records a user message and starts (or interrupts into) a new turn.
 func (l *Loop) Submit(runID, text string) error {
-	run, err := l.Store.GetRun(runID)
-	if err != nil {
+	if _, err := l.Store.GetRun(runID); err != nil {
 		return err
 	}
 	sess, err := l.Store.EnsureSession(runID)
@@ -93,11 +97,14 @@ func (l *Loop) Submit(runID, text string) error {
 	}
 	_ = l.Store.TouchRun(runID)
 	_ = l.Store.ResetAutoTurns(runID)
-	if run.Status == "paused" || run.Status == "stalled" || run.Status == "blocked" || run.Status == "achieved" {
-		_ = l.Store.UpdateRunStatus(runID, "active")
-	}
+	// A user message always means "run this": reactivate unconditionally so a
+	// Stop that raced with the read above cannot strand the message in a paused
+	// run. If Stop lands after this write it wins and the message is picked up
+	// by the next Submit/Resume.
+	_ = l.Store.UpdateRunStatus(runID, "active")
 	st := l.state(runID)
 	st.mu.Lock()
+	st.stopped = false
 	st.idle = 0
 	st.lastSig = ""
 	st.mu.Unlock()
@@ -115,17 +122,26 @@ func (l *Loop) Wake(runID string) {
 func (l *Loop) wake(runID string, interrupt bool) {
 	st := l.state(runID)
 	st.mu.Lock()
+	if st.stopped {
+		st.mu.Unlock()
+		return
+	}
 	if st.running {
 		st.pending = true
 		if interrupt && st.cancel != nil {
 			st.cancel()
 		}
 		st.mu.Unlock()
+		// The in-flight turn may be failing right now. Revive an error pause it
+		// causes so the queued wake (a subagent report or user message) is still
+		// consumed instead of parking the run.
+		l.reviveErrorPause(runID)
 		return
 	}
 	st.running = true
 	st.pending = false
 	st.mu.Unlock()
+	l.reviveErrorPause(runID)
 	if l.Store != nil {
 		// Only a freshly started turn may revive an achieved run. If a turn is
 		// already running, it will see pending and reactivate itself.
@@ -134,21 +150,34 @@ func (l *Loop) wake(runID string, interrupt bool) {
 	go l.turnLoop(runID)
 }
 
+// reviveErrorPause resumes a run whose failed turn paused it while a wake was
+// already in flight. Only an error pause is resumable; user stops, restart
+// pauses and stalls keep the run parked.
+func (l *Loop) reviveErrorPause(runID string) {
+	if l.Store == nil {
+		return
+	}
+	_, _ = l.Store.ActivateRunIfPausedByError(runID)
+}
+
 // Stop pauses a run and cancels its in-flight turn and subagents.
 func (l *Loop) Stop(runID string) error {
 	st := l.state(runID)
 	st.mu.Lock()
+	st.stopped = true
 	if st.cancel != nil {
 		st.cancel()
 	}
 	st.pending = false
 	st.mu.Unlock()
-	_ = l.Store.UpdateRunStatus(runID, "paused")
+	// Record the typed reason before cancelling subagents, so a report that
+	// lands from a cancelled task cannot revive the run.
+	_ = l.Store.PauseRun(runID, store.PauseReasonUserStop)
+	l.event(runID, "", "control", "", "用户停止任务", store.PauseReasonUserStop)
 	if l.OnStop != nil {
 		l.OnStop(runID)
 	}
 	_ = l.Store.CancelActiveTasks(runID)
-	l.event(runID, "", "control", "", "用户停止任务", "")
 	return nil
 }
 
@@ -160,6 +189,11 @@ func (l *Loop) Resume(runID string) error {
 	if err := l.Store.UpdateRunStatus(runID, "active"); err != nil {
 		return err
 	}
+	st := l.state(runID)
+	st.mu.Lock()
+	st.stopped = false
+	st.pending = false
+	st.mu.Unlock()
 	_ = l.Store.ResetAutoTurns(runID)
 	l.event(runID, "", "control", "", "恢复任务", "")
 	l.wake(runID, false)
@@ -176,6 +210,7 @@ func (l *Loop) Shutdown() {
 	l.mu.Unlock()
 	for _, st := range states {
 		st.mu.Lock()
+		st.stopped = true
 		if st.cancel != nil {
 			st.cancel()
 		}
@@ -279,6 +314,16 @@ func (l *Loop) turnLoop(runID string) {
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		st.mu.Lock()
+		if st.stopped {
+			// Stop won the race while this turn was being prepared. Abort before
+			// the provider is called so the stop cannot be lost.
+			st.mu.Unlock()
+			cancel()
+			if l.finish(runID) {
+				continue
+			}
+			return
+		}
 		st.cancel = cancel
 		st.mu.Unlock()
 		res, runErr := runner.Run(ctx, TurnRequest{
@@ -431,7 +476,18 @@ func (l *Loop) fail(runID, summary string, err error) {
 		detail = err.Error()
 	}
 	l.event(runID, "", "error", "", summary, detail)
-	_ = l.Store.UpdateRunStatus(runID, "paused")
+	if err := l.Store.PauseRunByError(runID); err != nil {
+		return
+	}
+	// A wake that landed while this turn was failing must not be swallowed by
+	// the pause: leave the run runnable so the loop consumes it.
+	st := l.state(runID)
+	st.mu.Lock()
+	pending := st.pending
+	st.mu.Unlock()
+	if pending {
+		l.reviveErrorPause(runID)
+	}
 }
 
 func (l *Loop) stall(runID, reason string) {

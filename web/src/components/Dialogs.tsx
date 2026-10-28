@@ -477,48 +477,52 @@ export function SettingsDialog({
                 ) : (
                   <p className="muted small">Anthropic 固定使用 max_tokens 字段。</p>
                 )}
+                <label className="field">
+                  <span>推理模式</span>
+                  <select
+                    value={provider.reasoningMode ?? "auto"}
+                    onChange={(e) => updateProvider(index, { reasoningMode: e.target.value })}
+                  >
+                    <option value="auto">
+                      {provider.kind === "anthropic" ? "自动（官方端点开启 extended thinking）" : "自动（跟随模型/请求）"}
+                    </option>
+                    <option value="on">开启</option>
+                    <option value="off">关闭</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>推理强度</span>
+                  <select
+                    value={provider.reasoningEffort ?? ""}
+                    onChange={(e) => updateProvider(index, { reasoningEffort: e.target.value })}
+                  >
+                    <option value="">模型默认</option>
+                    <option value="none">none</option>
+                    <option value="low">low</option>
+                    <option value="medium">medium</option>
+                    <option value="high">high</option>
+                    <option value="max">max</option>
+                    <option value="xhigh">xhigh</option>
+                  </select>
+                </label>
                 {provider.kind === "openai" ? (
-                  <>
-                    <label className="field">
-                      <span>推理模式</span>
-                      <select
-                        value={provider.reasoningMode ?? "auto"}
-                        onChange={(e) => updateProvider(index, { reasoningMode: e.target.value })}
-                      >
-                        <option value="auto">自动（跟随模型/请求）</option>
-                        <option value="on">开启</option>
-                        <option value="off">关闭</option>
-                      </select>
-                    </label>
-                    <label className="field">
-                      <span>推理强度</span>
-                      <select
-                        value={provider.reasoningEffort ?? ""}
-                        onChange={(e) => updateProvider(index, { reasoningEffort: e.target.value })}
-                      >
-                        <option value="">模型默认</option>
-                        <option value="none">none</option>
-                        <option value="low">low</option>
-                        <option value="medium">medium</option>
-                        <option value="high">high</option>
-                        <option value="max">max</option>
-                        <option value="xhigh">xhigh</option>
-                      </select>
-                    </label>
-                    <label className="field">
-                      <span>推理适配</span>
-                      <select
-                        value={provider.reasoningProfile ?? "auto"}
-                        onChange={(e) => updateProvider(index, { reasoningProfile: e.target.value })}
-                      >
-                        <option value="auto">自动（DeepSeek 模型用 thinking）</option>
-                        <option value="openai_compat">OpenAI 兼容（reasoning_effort）</option>
-                        <option value="deepseek_compat">DeepSeek 兼容（thinking）</option>
-                      </select>
-                    </label>
-                  </>
+                  <label className="field">
+                    <span>推理适配</span>
+                    <select
+                      value={provider.reasoningProfile ?? "auto"}
+                      onChange={(e) => updateProvider(index, { reasoningProfile: e.target.value })}
+                    >
+                      <option value="auto">自动（DeepSeek 端点用 thinking）</option>
+                      <option value="openai_compat">OpenAI 兼容（reasoning_effort）</option>
+                      <option value="deepseek_compat">DeepSeek 兼容（thinking）</option>
+                      <option value="output_config_effort">output_config.effort（Anthropic 风格网关）</option>
+                    </select>
+                  </label>
                 ) : (
-                  <p className="muted small">Anthropic 的推理由模型自身设置控制；这里只管理通道上下文与输出上限。</p>
+                  <p className="muted small">
+                    Anthropic：官方 anthropic.com 端点在 auto/on 下使用 extended thinking（4.6+ 用 adaptive，旧模型用 budget_tokens）；
+                    代理或兼容端点默认不发 thinking，需要时选“开启”；关闭时不再回放历史 thinking 块。
+                  </p>
                 )}
               </div>
             </article>

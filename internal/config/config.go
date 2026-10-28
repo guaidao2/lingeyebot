@@ -35,7 +35,9 @@ type Provider struct {
 	ReasoningMode string `json:"reasoningMode,omitempty"`
 	// ReasoningEffort is low|medium|high|max|xhigh|none; empty = model default.
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
-	// ReasoningProfile is auto|openai_compat|deepseek_compat.
+	// ReasoningProfile is auto|openai_compat|deepseek_compat|output_config_effort.
+	// auto resolves DeepSeek by endpoint (matching CyberStrikeAI), otherwise it
+	// falls back to OpenAI-compatible reasoning_effort.
 	ReasoningProfile string  `json:"reasoningProfile,omitempty"`
 	Temperature      float64 `json:"temperature,omitempty"`
 }
@@ -386,7 +388,7 @@ func normalize(cfg *Config) {
 		}
 		p.ReasoningProfile = strings.ToLower(strings.TrimSpace(p.ReasoningProfile))
 		switch p.ReasoningProfile {
-		case "openai_compat", "deepseek_compat":
+		case "openai_compat", "deepseek_compat", "output_config_effort":
 		default:
 			p.ReasoningProfile = "auto"
 		}

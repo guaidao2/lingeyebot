@@ -19,7 +19,7 @@ import (
 	"github.com/guaidao2/lingeyebot/internal/store"
 )
 
-const version = "1.0.6"
+const version = "1.0.7"
 
 func main() {
 	var addr string

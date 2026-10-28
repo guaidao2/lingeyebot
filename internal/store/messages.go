@@ -42,8 +42,8 @@ func (s *Store) AddMessage(m Message) (Message, error) {
 	if len(m.ToolCalls) == 0 {
 		m.ToolCalls = json.RawMessage("[]")
 	}
-	_, err := s.DB.Exec(`INSERT INTO messages (id, session_id, run_id, role, content, reasoning, tool_calls, tool_call_id, name, visible, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`, m.ID, m.SessionID, m.RunID, m.Role, m.Content, m.Reasoning, string(m.ToolCalls),
+	_, err := s.DB.Exec(`INSERT INTO messages (id, session_id, run_id, role, content, reasoning, reasoning_signature, tool_calls, tool_call_id, name, visible, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, m.ID, m.SessionID, m.RunID, m.Role, m.Content, m.Reasoning, m.ReasoningSignature, string(m.ToolCalls),
 		m.ToolCallID, m.Name, boolInt(m.Visible), m.CreatedAt)
 	if err != nil {
 		return m, fmt.Errorf("insert message: %w", err)
@@ -53,11 +53,11 @@ func (s *Store) AddMessage(m Message) (Message, error) {
 
 // ListMessages returns messages in chronological order.
 func (s *Store) ListMessages(sessionID string, limit int) ([]Message, error) {
-	query := `SELECT id, session_id, run_id, role, content, reasoning, tool_calls, tool_call_id, name, visible, created_at
+	query := `SELECT id, session_id, run_id, role, content, reasoning, reasoning_signature, tool_calls, tool_call_id, name, visible, created_at
 		FROM messages WHERE session_id=? ORDER BY created_at, rowid`
 	args := []any{sessionID}
 	if limit > 0 {
-		query = `SELECT id, session_id, run_id, role, content, reasoning, tool_calls, tool_call_id, name, visible, created_at
+		query = `SELECT id, session_id, run_id, role, content, reasoning, reasoning_signature, tool_calls, tool_call_id, name, visible, created_at
 			FROM messages WHERE session_id=? ORDER BY created_at DESC, rowid DESC LIMIT ?`
 		args = append(args, limit)
 	}
@@ -71,7 +71,7 @@ func (s *Store) ListMessages(sessionID string, limit int) ([]Message, error) {
 		var m Message
 		var calls string
 		var visible int
-		if err := rows.Scan(&m.ID, &m.SessionID, &m.RunID, &m.Role, &m.Content, &m.Reasoning, &calls, &m.ToolCallID, &m.Name, &visible, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.SessionID, &m.RunID, &m.Role, &m.Content, &m.Reasoning, &m.ReasoningSignature, &calls, &m.ToolCallID, &m.Name, &visible, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		m.ToolCalls = json.RawMessage(calls)

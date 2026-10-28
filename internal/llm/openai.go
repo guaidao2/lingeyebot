@@ -49,44 +49,72 @@ func (p *OpenAI) OutputCap() int { return p.maxTokens }
 // ContextWindow returns this channel's context budget, or 0 to inherit.
 func (p *OpenAI) ContextWindow() int { return p.contextWindow }
 
-func (p *OpenAI) applyReasoning(body map[string]any, model string) {
+// usesDeepSeekWire reports whether this endpoint speaks DeepSeek's thinking
+// dialect. Auto-detection follows CyberStrikeAI's IsDeepSeekEndpointOrModel: the
+// endpoint is the reliable signal, because a model name alone says nothing about
+// a third-party gateway's wire behavior.
+func (p *OpenAI) usesDeepSeekWire(model string) bool {
+	return p.reasoningProfileFor(model) == "deepseek_compat"
+}
+
+// reasoningProfileFor resolves auto to the wire dialect for this model. Both
+// request construction and reasoning replay read it, so they cannot drift.
+func (p *OpenAI) reasoningProfileFor(model string) string {
+	profile := p.reasoningProfile
+	if profile == "" || profile == "auto" {
+		if strings.Contains(strings.ToLower(p.baseURL), "deepseek") {
+			return "deepseek_compat"
+		}
+		return "openai_compat"
+	}
+	return profile
+}
+
+func (p *OpenAI) applyReasoning(body map[string]any, model string, disabled bool) {
 	mode := p.reasoningMode
 	if mode == "" {
 		mode = "auto"
 	}
-	profile := p.reasoningProfile
-	if profile == "" || profile == "auto" {
-		if strings.Contains(strings.ToLower(model), "deepseek") {
-			profile = "deepseek_compat"
-		} else {
-			profile = "openai_compat"
-		}
-	}
-	effort := p.reasoningEffort
-	if effort == "none" {
+	effort := strings.ToLower(strings.TrimSpace(p.reasoningEffort))
+	if effort == "none" || disabled {
 		mode = "off"
 	}
-	if profile == "deepseek_compat" {
+	switch p.reasoningProfileFor(model) {
+	case "deepseek_compat":
 		switch mode {
 		case "off":
 			body["thinking"] = map[string]any{"type": "disabled"}
-		case "on":
+		case "on", "auto":
+			// DeepSeek enables thinking by default; send it explicitly so the
+			// intent survives gateway defaults.
 			body["thinking"] = map[string]any{"type": "enabled"}
-		default:
 			if effort != "" {
-				body["thinking"] = map[string]any{"type": "enabled"}
+				body["reasoning_effort"] = effort
 			}
 		}
-		return
-	}
-	if mode == "off" {
-		if isOpenAIReasoningModel(model) || effort == "none" {
-			body["reasoning_effort"] = "none"
+	case "output_config_effort":
+		if mode == "off" {
+			return
 		}
-		return
-	}
-	if effort != "" && effort != "none" {
-		body["reasoning_effort"] = effort
+		if effort == "" && mode == "on" {
+			effort = "high"
+		}
+		if effort != "" {
+			body["output_config"] = map[string]any{"effort": effort}
+		}
+	default: // openai_compat
+		if mode == "off" {
+			if isOpenAIReasoningModel(model) || effort == "none" {
+				body["reasoning_effort"] = "none"
+			}
+			return
+		}
+		if effort == "" && mode == "on" {
+			effort = "medium"
+		}
+		if effort != "" {
+			body["reasoning_effort"] = effort
+		}
 	}
 }
 
@@ -128,11 +156,12 @@ func OpenAIEndpoint(base string) string {
 }
 
 type openAIMessage struct {
-	Role       string           `json:"role"`
-	Content    any              `json:"content,omitempty"`
-	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
-	Name       string           `json:"name,omitempty"`
+	Role             string           `json:"role"`
+	Content          any              `json:"content,omitempty"`
+	ReasoningContent *string          `json:"reasoning_content,omitempty"`
+	ToolCalls        []openAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string           `json:"tool_call_id,omitempty"`
+	Name             string           `json:"name,omitempty"`
 }
 
 type openAIToolCall struct {
@@ -155,12 +184,26 @@ type openAITool struct {
 
 // Chat performs one OpenAI-compatible call.
 func (p *OpenAI) Chat(ctx context.Context, req Request) (Response, error) {
+	model := firstNonEmpty(req.Model, p.model)
+	deepseekWire := p.usesDeepSeekWire(model)
 	messages := make([]openAIMessage, 0, len(req.Messages)+1)
 	if strings.TrimSpace(req.System) != "" {
 		messages = append(messages, openAIMessage{Role: "system", Content: req.System})
 	}
 	for _, m := range req.Messages {
 		om := openAIMessage{Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallID, Name: m.Name}
+		if m.Role == "assistant" {
+			// CyberStrikeAI keeps reasoning_content in history for every
+			// provider. DeepSeek additionally needs the field present even when
+			// a turn produced no reasoning, otherwise thinking+tools replay 400s.
+			if m.Reasoning != "" {
+				reasoning := m.Reasoning
+				om.ReasoningContent = &reasoning
+			} else if deepseekWire {
+				empty := ""
+				om.ReasoningContent = &empty
+			}
+		}
 		if m.Role == "tool" && m.Content == "" {
 			om.Content = ""
 		}
@@ -180,7 +223,7 @@ func (p *OpenAI) Chat(ctx context.Context, req Request) (Response, error) {
 		messages = append(messages, om)
 	}
 
-	body := map[string]any{"model": firstNonEmpty(req.Model, p.model), "messages": messages}
+	body := map[string]any{"model": model, "messages": messages}
 	if len(req.Tools) > 0 {
 		tools := make([]openAITool, 0, len(req.Tools))
 		for _, t := range req.Tools {
@@ -200,9 +243,8 @@ func (p *OpenAI) Chat(ctx context.Context, req Request) (Response, error) {
 	if maxTokens <= 0 {
 		maxTokens = DefaultMaxTokens
 	}
-	model := firstNonEmpty(req.Model, p.model)
 	body[openAITokenKey(model, p.maxTokensField)] = maxTokens
-	p.applyReasoning(body, model)
+	p.applyReasoning(body, model, req.DisableReasoning)
 	if req.Temperature > 0 {
 		body["temperature"] = req.Temperature
 	}

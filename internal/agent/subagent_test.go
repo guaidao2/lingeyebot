@@ -128,6 +128,52 @@ func TestSubagentFinishReactivatesAchievedParent(t *testing.T) {
 	}
 }
 
+func TestSubagentFinishRevivesErrorPausedRun(t *testing.T) {
+	st, run, _ := newTestStore(t)
+	task, err := st.CreateTask(store.Task{RunID: run.ID, Role: "worker", Title: "收尾"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PauseRun(run.ID, store.PauseReasonError); err != nil {
+		t.Fatal(err)
+	}
+	mgr := &SubagentManager{Store: st}
+	mgr.finish(run, task, "done", "子代理结果", "")
+
+	got, err := st.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "active" || got.PauseReason != "" {
+		t.Fatalf("error-paused run not revived: status=%s reason=%q", got.Status, got.PauseReason)
+	}
+}
+
+func TestSubagentFinishKeepsStoppedRunPaused(t *testing.T) {
+	for _, reason := range []string{store.PauseReasonUserStop, store.PauseReasonRestart, ""} {
+		t.Run(reason, func(t *testing.T) {
+			st, run, _ := newTestStore(t)
+			task, err := st.CreateTask(store.Task{RunID: run.ID, Role: "worker", Title: "收尾"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.PauseRun(run.ID, reason); err != nil {
+				t.Fatal(err)
+			}
+			mgr := &SubagentManager{Store: st}
+			mgr.finish(run, task, "done", "子代理结果", "")
+
+			got, err := st.GetRun(run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != "paused" || got.PauseReason != reason {
+				t.Fatalf("pause was overwritten: status=%s reason=%q, want paused/%q", got.Status, got.PauseReason, reason)
+			}
+		})
+	}
+}
+
 func TestSubagentRejectsUnknownRole(t *testing.T) {
 	st, run, _ := newTestStore(t)
 	mgr := &SubagentManager{

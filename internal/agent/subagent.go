@@ -218,11 +218,20 @@ func (m *SubagentManager) finish(run store.Run, task store.Task, status, result,
 			SessionID: parent.ID, RunID: run.ID, Role: "user", Content: announce, Visible: false,
 		})
 	}
+	// A turn error pauses the parent; the report that lands afterwards must
+	// revive it or the parent never consumes it. The resume is conditional in
+	// SQL on pause_reason=error, so a user stop, a restart pause or a manual
+	// pause is never overwritten by a late report.
+	if _, err := m.Store.ActivateRunIfPausedByError(run.ID); err != nil {
+		m.report(run.ID, task.ID, "error", "", "恢复父任务失败", err.Error())
+	}
 	if _, err := m.Store.ActivateRunIfAchieved(run.ID); err != nil {
 		m.report(run.ID, task.ID, "error", "", "恢复父任务失败", err.Error())
 	}
 	if m.Loop != nil {
-		m.Loop.Wake(run.ID)
+		if current, err := m.Store.GetRun(run.ID); err == nil && current.Status == "active" {
+			m.Loop.Wake(run.ID)
+		}
 	}
 }
 

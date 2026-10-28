@@ -26,12 +26,23 @@ func (p *OpenAI) ChatStreamWithReasoning(ctx context.Context, req Request, onCon
 }
 
 func (p *OpenAI) chatStream(ctx context.Context, req Request, onDelta, onReasoning func(string)) (Response, error) {
+	streamModel := firstNonEmpty(req.Model, p.model)
+	deepseekWire := p.usesDeepSeekWire(streamModel)
 	messages := make([]openAIMessage, 0, len(req.Messages)+1)
 	if strings.TrimSpace(req.System) != "" {
 		messages = append(messages, openAIMessage{Role: "system", Content: req.System})
 	}
 	for _, m := range req.Messages {
 		om := openAIMessage{Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallID, Name: m.Name}
+		if m.Role == "assistant" {
+			if m.Reasoning != "" {
+				reasoning := m.Reasoning
+				om.ReasoningContent = &reasoning
+			} else if deepseekWire {
+				empty := ""
+				om.ReasoningContent = &empty
+			}
+		}
 		for _, tc := range m.ToolCalls {
 			args := string(tc.Arguments)
 			if strings.TrimSpace(args) == "" {
@@ -47,9 +58,8 @@ func (p *OpenAI) chatStream(ctx context.Context, req Request, onDelta, onReasoni
 		}
 		messages = append(messages, om)
 	}
-	streamModel := firstNonEmpty(req.Model, p.model)
 	body := map[string]any{"model": streamModel, "messages": messages, "stream": true}
-	p.applyReasoning(body, streamModel)
+	p.applyReasoning(body, streamModel, req.DisableReasoning)
 	if len(req.Tools) > 0 {
 		tools := make([]openAITool, 0, len(req.Tools))
 		for _, t := range req.Tools {
@@ -212,6 +222,16 @@ func (p *Anthropic) ChatStreamWithReasoning(ctx context.Context, req Request, on
 }
 
 func (p *Anthropic) chatStream(ctx context.Context, req Request, onDelta, onReasoning func(string)) (Response, error) {
+	model := firstNonEmpty(req.Model, p.model)
+	maxTokens := req.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = p.maxTokens
+	}
+	if maxTokens <= 0 {
+		maxTokens = DefaultMaxTokens
+	}
+	thinkingCfg, allowEffort := p.thinkingConfigForMessages(req, model, maxTokens)
+
 	messages := make([]anthropicMessage, 0, len(req.Messages))
 	for _, m := range req.Messages {
 		switch m.Role {
@@ -219,6 +239,11 @@ func (p *Anthropic) chatStream(ctx context.Context, req Request, onDelta, onReas
 			appendAnthropic(&messages, "user", []anthropicBlock{{Type: "text", Text: m.Content}})
 		case "assistant":
 			blocks := []anthropicBlock{}
+			if thinkingCfg != nil && m.ReasoningSignature != "" {
+				blocks = append(blocks, anthropicBlock{
+					Type: "thinking", Thinking: m.Reasoning, Signature: m.ReasoningSignature,
+				})
+			}
 			if m.Content != "" {
 				blocks = append(blocks, anthropicBlock{Type: "text", Text: m.Content})
 			}
@@ -234,16 +259,15 @@ func (p *Anthropic) chatStream(ctx context.Context, req Request, onDelta, onReas
 			appendAnthropic(&messages, "user", []anthropicBlock{{Type: "tool_result", ToolUseID: m.ToolCallID, Content: m.Content}})
 		}
 	}
-	maxTokens := req.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = p.maxTokens
-	}
-	if maxTokens <= 0 {
-		maxTokens = DefaultMaxTokens
-	}
 	body := map[string]any{
-		"model": firstNonEmpty(req.Model, p.model), "max_tokens": maxTokens,
+		"model": model, "max_tokens": maxTokens,
 		"messages": messages, "stream": true,
+	}
+	if thinkingCfg != nil {
+		body["thinking"] = thinkingCfg
+		if effort := strings.ToLower(strings.TrimSpace(p.reasoningEffort)); allowEffort && effort != "" && effort != "none" {
+			body["output_config"] = map[string]any{"effort": effort}
+		}
 	}
 	if strings.TrimSpace(req.System) != "" {
 		body["system"] = req.System
@@ -255,7 +279,7 @@ func (p *Anthropic) chatStream(ctx context.Context, req Request, onDelta, onReas
 		}
 		body["tools"] = tools
 	}
-	if req.Temperature > 0 {
+	if req.Temperature > 0 && thinkingCfg == nil {
 		body["temperature"] = req.Temperature
 	}
 	payload, err := json.Marshal(body)
@@ -286,11 +310,12 @@ func (p *Anthropic) chatStream(ctx context.Context, req Request, onDelta, onReas
 	}
 
 	type blockState struct {
-		kind string
-		text strings.Builder
-		id   string
-		name string
-		args strings.Builder
+		kind      string
+		text      strings.Builder
+		signature strings.Builder
+		id        string
+		name      string
+		args      strings.Builder
 	}
 	blocks := map[int]*blockState{}
 	result := Response{}
@@ -309,15 +334,17 @@ func (p *Anthropic) chatStream(ctx context.Context, req Request, onDelta, onReas
 			Type         string `json:"type"`
 			Index        int    `json:"index"`
 			ContentBlock struct {
-				Type string `json:"type"`
-				ID   string `json:"id"`
-				Name string `json:"name"`
-				Text string `json:"text"`
+				Type      string `json:"type"`
+				ID        string `json:"id"`
+				Name      string `json:"name"`
+				Text      string `json:"text"`
+				Signature string `json:"signature"`
 			} `json:"content_block"`
 			Delta struct {
 				Type        string `json:"type"`
 				Text        string `json:"text"`
 				Thinking    string `json:"thinking"`
+				Signature   string `json:"signature"`
 				PartialJSON string `json:"partial_json"`
 				StopReason  string `json:"stop_reason"`
 			} `json:"delta"`
@@ -338,6 +365,9 @@ func (p *Anthropic) chatStream(ctx context.Context, req Request, onDelta, onReas
 		if event.Type == "content_block_start" {
 			state := &blockState{kind: event.ContentBlock.Type, id: event.ContentBlock.ID, name: event.ContentBlock.Name}
 			state.text.WriteString(event.ContentBlock.Text)
+			if event.ContentBlock.Signature != "" {
+				state.signature.WriteString(event.ContentBlock.Signature)
+			}
 			blocks[event.Index] = state
 			continue
 		}
@@ -355,10 +385,17 @@ func (p *Anthropic) chatStream(ctx context.Context, req Request, onDelta, onReas
 					onDelta(event.Delta.Text)
 				}
 			case "thinking_delta":
+				state.kind = "thinking"
+				state.text.WriteString(event.Delta.Thinking)
 				result.Reasoning += event.Delta.Thinking
 				if onReasoning != nil && event.Delta.Thinking != "" {
 					onReasoning(event.Delta.Thinking)
 				}
+			case "signature_delta":
+				// Anthropic sends the opaque signature for the thinking block
+				// after its text; it must be replayed verbatim on continuation.
+				state.kind = "thinking"
+				state.signature.WriteString(event.Delta.Signature)
 			case "input_json_delta":
 				state.kind = "tool_use"
 				state.args.WriteString(event.Delta.PartialJSON)
@@ -385,11 +422,18 @@ func (p *Anthropic) chatStream(ctx context.Context, req Request, onDelta, onReas
 	}
 	sort.Ints(indices)
 	var text strings.Builder
+	var signed *blockState
+	signedBlocks := 0
 	for _, index := range indices {
 		state := blocks[index]
 		switch state.kind {
 		case "text":
 			text.WriteString(state.text.String())
+		case "thinking":
+			if state.signature.Len() > 0 {
+				signedBlocks++
+				signed = state
+			}
 		case "tool_use":
 			args := state.args.String()
 			if strings.TrimSpace(args) == "" {
@@ -397,6 +441,12 @@ func (p *Anthropic) chatStream(ctx context.Context, req Request, onDelta, onReas
 			}
 			result.ToolCalls = append(result.ToolCalls, ToolCall{ID: state.id, Name: state.name, Arguments: json.RawMessage(args)})
 		}
+	}
+	// Replay only a single signed thinking block: with several we cannot
+	// represent their text/signature pairing in one persisted message.
+	if signedBlocks == 1 && signed != nil {
+		result.Reasoning = signed.text.String()
+		result.ReasoningSignature = signed.signature.String()
 	}
 	result.Content = text.String()
 	return result, nil
